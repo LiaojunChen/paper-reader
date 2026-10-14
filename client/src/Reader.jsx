@@ -5,7 +5,7 @@ import AnnotationsPanel, { ColorDots } from './Annotations.jsx';
 import { CiteCard, RefDetail, refFromDest, invalidateRef } from './refs.jsx';
 import { api, stream, subscribe, COLORS, fmtAuthors } from './api.js';
 import Markdown from './Markdown.jsx';
-import NoteEditor, { openNoteWindow, noteChannel, deriveTitle } from './NoteEditor.jsx';
+import NoteEditor, { openNoteWindow, noteChannel, noteUrl } from './NoteEditor.jsx';
 import { ChatPanel, InfoPanel, OutlinePanel } from './ReaderPanels.jsx';
 
 export default function Reader({ itemId, settings, onOpenItem, onItemChanged, visible }) {
@@ -47,7 +47,12 @@ export default function Reader({ itemId, settings, onOpenItem, onItemChanged, vi
     if (m.type === 'annotation' && m.annotation.item_id === itemId && !deletedIds.current.has(m.annotation.id)) setAnns(list => upsert(list, m.annotation));
     if (m.type === 'annotation-deleted' && m.item_id === itemId) setAnns(list => list.filter(a => a.id !== m.id));
     if (m.type === 'item' && m.id === itemId) api.get(`/api/items/${itemId}`).then(setItem);
-    if (m.type === 'note' && m.note.item_id === itemId) setNotes(l => upsert(l, m.note));
+    if (m.type === 'note' && m.note.item_id === itemId) {
+      // Renamed by its heading: replace the old path in the list and keep it open
+      if (m.renamedFrom) { setNotes(l => l.filter(n => n.id !== m.renamedFrom)); setNoteId(id => id === m.renamedFrom ? m.note.id : id); }
+      setNotes(l => upsert(l, m.note));
+    }
+    if (m.type === 'tree') api.get(`/api/notes?item=${itemId}`).then(setNotes);
     if (m.type === 'note-deleted' && m.item_id === itemId) { setNotes(l => l.filter(n => n.id !== m.id)); setNoteId(id => id === m.id ? null : id); }
   }), [itemId]);
 
@@ -121,9 +126,9 @@ export default function Reader({ itemId, settings, onOpenItem, onItemChanged, vi
     noteChannel?.postMessage({ noteId: id, text });
     if (tab === 'notes' && noteEd.current) noteEd.current.insert(text);
     else {
-      const n = await api.get(`/api/notes/${id}`);
+      const n = await api.get(noteUrl(id));
       const content = n.content.replace(/\s*$/, '') + '\n\n' + text + '\n';
-      await api.patch(`/api/notes/${id}`, { content, title: deriveTitle(content) });
+      await api.put(noteUrl(id), { content });
     }
   }
 
@@ -338,7 +343,8 @@ export default function Reader({ itemId, settings, onOpenItem, onItemChanged, vi
               ) : <DestPreview pdf={pdf} info={cite.preview} large onOpen={() => pdf.current?.goToDest(cite.preview.dest, cite.preview.pageNum)} />
           )}
           {tab === 'notes' && (noteId
-            ? <NoteEditor ref={noteEd} key={noteId} id={noteId} onBack={() => setNoteId(null)} onDeleted={() => setNoteId(null)} />
+            ? <NoteEditor ref={noteEd} key={noteId} id={noteId} onBack={() => setNoteId(null)} onDeleted={() => setNoteId(null)}
+                onRenamed={(nid, old) => { setNotes(l => l.filter(n => n.id !== old)); setNoteId(nid); }} />
             : <NoteList notes={notes} onOpen={setNoteId} onNew={async () => {
                 const n = await api.post('/api/notes', { item_id: itemId, content: `# ${item.title} 笔记\n` });
                 setNotes(l => upsert(l, n)); setNoteId(n.id);

@@ -96,7 +96,17 @@ a { color: var(--accent); }
 .folder { width: 1.3rem; text-align: center; flex: none; }
 .tree-name { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .tree-acts { display: none; } .tree-row:hover .tree-acts { display: flex; }
-.tree-sec { display: flex; justify-content: space-between; align-items: center; padding: 0.9rem 0.9rem 0.3rem 1rem; color: var(--muted); font-size: 0.78rem; font-weight: 600; letter-spacing: .06em; }
+.tree-sec { display: flex; justify-content: space-between; align-items: center; padding: 0.9rem 0.5rem 0.3rem 1rem; color: var(--muted); font-size: 0.78rem; font-weight: 600; letter-spacing: .06em; }
+.tree-sec .icon { font-size: 0.85rem; }
+.tree-root { padding-bottom: 2rem; min-height: 6rem; border-radius: var(--radius-sm); }
+.tree-root.over { outline: 2px dashed var(--accent); outline-offset: -2px; }
+.tree-row.paper .tree-name { color: var(--text); }
+.tree-row.note { color: var(--text-2); }
+.tree-row.note .tree-name { font-size: 0.93rem; }
+.tree-count { font-size: 0.72rem; color: var(--muted); background: #e2e5ea; border-radius: 1rem; padding: 0 0.4rem; flex: none; }
+.d-folder { display: flex; align-items: center; gap: 0.5rem; margin: 0.5rem 0; }
+.d-folder select { flex: 1; min-width: 0; }
+.note-path { max-width: 10rem; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 
 .item-table { flex: 1; overflow-y: auto; }
 .item-row { display: flex; align-items: center; height: 2.5rem; padding: 0 0.7rem; border-bottom: 1px solid var(--line-soft); cursor: default; user-select: none; }

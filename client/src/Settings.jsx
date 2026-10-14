@@ -45,6 +45,10 @@ export default function Settings({ settings, onClose, onSaved }) {
         {inp('targetLang', '翻译目标语言')}
         <div className="row"><button className="btn" onClick={test}>测试连接</button><span className="small">{testing}</span></div>
 
+        <div className="set-sec">笔记库（Obsidian 兼容）</div>
+        <div className="muted small">左侧的文件夹和笔记都是这个目录下真实的文件夹和 .md 文件，可以直接用 Obsidian 打开同一个目录。论文 PDF、元数据和批注仍存在数据库里。改到一个已有的 Obsidian 库也可以。</div>
+        {inp('vaultDir', '笔记库路径')}
+
         <div className="set-sec">文献元数据</div>
         <div className="muted small">引用信息来自 OpenAlex（含摘要）和 Crossref。OpenAlex 不填 Key 时与同一出口 IP 的所有人共享每日免费额度，额度用完后只能用 Crossref（没有摘要）。可以在 openalex.org 免费申请 Key。</div>
         {inp('openalexKey', 'OpenAlex API Key（可选）', { type: 'password' })}

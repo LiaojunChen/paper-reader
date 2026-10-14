@@ -9,6 +9,7 @@ import { resolvePaper, titleFromReference, downloadPdf, configureSources, source
 import { fetchArticle } from './webclip.js';
 import { runTask, cancelTask, setBroadcaster, isRunning } from './agent.js';
 import { chat } from './llm.js';
+import * as vault from './vault.js';
 
 const app = express();
 app.use(express.json({ limit: '20mb' }));
@@ -38,79 +39,116 @@ const wrap = fn => (req, res) => Promise.resolve(fn(req, res)).catch(e => {
 });
 const notFound = () => Object.assign(new Error('未找到'), { status: 404 });
 
-// ---------- Collections ----------
-app.get('/api/collections', (req, res) => res.json(db.prepare('SELECT * FROM collections ORDER BY name COLLATE NOCASE').all()));
-app.post('/api/collections', (req, res) => {
-  const c = { id: uid(), name: (req.body.name || '新建分类').slice(0, 200), parent_id: req.body.parent_id || null, created: now() };
-  db.prepare('INSERT INTO collections (id, name, parent_id, created) VALUES (?, ?, ?, ?)').run(c.id, c.name, c.parent_id, c.created);
-  res.json(c);
+// ---------- Folders (real directories in the vault) ----------
+// A paper's `folder` is the category directory it belongs to; its own note folder lives inside it.
+const underFolder = (f, root) => !root || f === root || f.startsWith(root + '/');
+const reFolder = (f, from, to) => f === from ? to : to + f.slice(from.length);
+function syncItemFolders() {
+  // Keep items.folder in step with where their paper folders actually are (handles moves made in Obsidian)
+  const { paperDirs, folders } = vault.scan();
+  const known = new Set(folders.map(x => x.path));
+  for (const it of db.prepare('SELECT id, folder FROM items').all()) {
+    const dir = paperDirs.get(it.id);
+    let f = it.folder;
+    if (dir != null) f = dir.includes('/') ? dir.slice(0, dir.lastIndexOf('/')) : '';
+    else if (f && !known.has(f)) f = '';               // its category folder was deleted/renamed outside the app
+    if (f !== it.folder) db.prepare('UPDATE items SET folder = ? WHERE id = ?').run(f, it.id);
+  }
+}
+app.get('/api/tree', (req, res) => {
+  syncItemFolders();
+  const { folders, notes } = vault.scan();
+  const items = db.prepare("SELECT id, title, kind, folder, file FROM items WHERE deleted = 0 ORDER BY title COLLATE NOCASE").all();
+  res.json({ vault: vault.getVaultDir(), folders, notes: notes.map(({ id, title, dir, itemId, mtime }) => ({ id, title, dir, itemId, mtime })), items });
 });
-app.patch('/api/collections/:id', (req, res) => {
-  if (req.body.parent_id === req.params.id) return res.status(400).json({ error: '不能把分类移到自身下' });
-  update('collections', req.params.id, req.body, ['name', 'parent_id']);
-  res.json(db.prepare('SELECT * FROM collections WHERE id = ?').get(req.params.id));
-});
-app.delete('/api/collections/:id', (req, res) => {
-  db.prepare('DELETE FROM collections WHERE id = ?').run(req.params.id);
+app.post('/api/folders', wrap(async (req, res) => {
+  const rel = vault.createFolder(req.body.parent || '', req.body.name || '新建文件夹');
+  broadcast({ type: 'tree' });
+  res.json({ path: rel });
+}));
+// Rename / move a folder: papers inside follow along
+app.patch('/api/folders', wrap(async (req, res) => {
+  const from = String(req.body.path || '');
+  if (!from) throw Object.assign(new Error('不能重命名根目录'), { status: 400 });
+  const to = vault.moveFolder(from, { name: req.body.name, parent: req.body.parent });
+  const st = db.prepare('UPDATE items SET folder = ? WHERE id = ?');
+  for (const it of db.prepare('SELECT id, folder FROM items').all()) if (underFolder(it.folder, from)) st.run(reFolder(it.folder, from, to), it.id);
+  broadcast({ type: 'tree' }); broadcast({ type: 'items' });
+  res.json({ path: to });
+}));
+// Delete a folder: notes go to the vault's .trash; papers move up to the parent folder (never deleted)
+app.delete('/api/folders', wrap(async (req, res) => {
+  const rel = String(req.query.path || '');
+  if (!rel) throw Object.assign(new Error('不能删除根目录'), { status: 400 });
+  const parent = rel.includes('/') ? rel.slice(0, rel.lastIndexOf('/')) : '';
+  for (const it of db.prepare('SELECT id, folder FROM items').all()) {
+    if (!underFolder(it.folder, rel)) continue;
+    vault.movePaperDir(it.id, parent);   // keep the paper's own notes with it
+    db.prepare('UPDATE items SET folder = ? WHERE id = ?').run(parent, it.id);
+  }
+  vault.trashPath(rel);
+  broadcast({ type: 'tree' }); broadcast({ type: 'items' });
   res.json({ ok: true });
-});
-app.post('/api/collections/:id/items', (req, res) => {
-  const st = db.prepare('INSERT OR IGNORE INTO item_collections (item_id, collection_id) VALUES (?, ?)');
-  for (const id of req.body.itemIds || []) st.run(id, req.params.id);
-  for (const id of req.body.noteIds || []) db.prepare('INSERT OR IGNORE INTO note_collections (note_id, collection_id) VALUES (?, ?)').run(id, req.params.id);
+}));
+// Move papers and/or notes into a folder
+app.post('/api/move', wrap(async (req, res) => {
+  const folder = String(req.body.folder || '');
+  vault.ensureFolder(folder);
+  for (const id of req.body.itemIds || []) {
+    vault.movePaperDir(id, folder);
+    db.prepare('UPDATE items SET folder = ?, updated = ? WHERE id = ?').run(folder, now(), id);
+  }
+  for (const id of req.body.noteIds || []) vault.moveNote(id, { dir: folder });
+  broadcast({ type: 'tree' }); broadcast({ type: 'items' });
   res.json({ ok: true });
-});
-app.delete('/api/collections/:id/items/:itemId', (req, res) => {
-  db.prepare('DELETE FROM item_collections WHERE collection_id = ? AND item_id = ?').run(req.params.id, req.params.itemId);
-  db.prepare('DELETE FROM note_collections WHERE collection_id = ? AND note_id = ?').run(req.params.id, req.params.itemId);
-  res.json({ ok: true });
-});
+}));
 
 // ---------- Items ----------
-const LIST_COLS = `i.id, i.title, i.authors, i.year, i.venue, i.doi, i.arxiv, i.url, i.file, i.tags, i.meta_status, i.kind,
+const LIST_COLS = `i.id, i.title, i.authors, i.year, i.venue, i.doi, i.arxiv, i.url, i.file, i.tags, i.meta_status, i.kind, i.folder,
   i.starred, i.deleted, i.created, i.updated, i.last_page, i.num_pages,
-  (SELECT COUNT(*) FROM annotations a WHERE a.item_id = i.id) AS ann_count,
-  (SELECT COUNT(*) FROM notes n WHERE n.item_id = i.id) AS note_count,
-  (SELECT GROUP_CONCAT(collection_id) FROM item_collections ic WHERE ic.item_id = i.id) AS collection_ids`;
+  (SELECT COUNT(*) FROM annotations a WHERE a.item_id = i.id) AS ann_count`;
 
+// ?folder=具身推理 lists that folder and its sub-folders; ?view=unfiled = vault root only
 app.get('/api/items', (req, res) => {
-  const { collection, q, view } = req.query;
+  const { folder, q, view } = req.query;
+  syncItemFolders();
   const where = [], args = [];
   if (view === 'trash') where.push('i.deleted = 1'); else where.push('i.deleted = 0');
   if (view === 'starred') where.push('i.starred = 1');
-  if (view === 'unfiled') where.push('NOT EXISTS (SELECT 1 FROM item_collections ic WHERE ic.item_id = i.id)');
-  if (collection) {
-    // include sub-collections
-    const ids = descendants(collection);
-    where.push(`EXISTS (SELECT 1 FROM item_collections ic WHERE ic.item_id = i.id AND ic.collection_id IN (${ids.map(() => '?').join(',')}))`);
-    args.push(...ids);
-  }
+  if (view === 'unfiled') where.push("i.folder = ''");
+  if (folder) { where.push('(i.folder = ? OR i.folder LIKE ?)'); args.push(folder, `${folder}/%`); }
+  // Notes live in files, so note matches are found in the vault and merged in by id
+  const noteHits = q ? new Set(vault.searchNotes(q).map(n => n.itemId).filter(Boolean)) : null;
   if (q) {
     where.push(`(i.title LIKE ? OR i.authors LIKE ? OR i.tags LIKE ? OR i.abstract LIKE ? OR i.venue LIKE ?
       OR EXISTS (SELECT 1 FROM annotations a WHERE a.item_id = i.id AND (a.text LIKE ? OR a.comment LIKE ?))
-      OR EXISTS (SELECT 1 FROM notes n WHERE n.item_id = i.id AND n.content LIKE ?))`);
-    args.push(...Array(8).fill(`%${q}%`));
+      ${noteHits.size ? `OR i.id IN (${[...noteHits].map(() => '?').join(',')})` : ''})`);
+    args.push(...Array(7).fill(`%${q}%`), ...noteHits);
   }
+  const counts = noteCounts();
   const rows = db.prepare(`SELECT ${LIST_COLS} FROM items i WHERE ${where.join(' AND ')} ORDER BY i.created DESC`).all(...args);
-  res.json(rows.map(r => ({ ...decode(r), collection_ids: r.collection_ids ? r.collection_ids.split(',') : [] })));
+  res.json(rows.map(r => ({ ...decode(r), note_count: counts.get(r.id) || 0 })));
 });
-
-function descendants(id) {
-  const all = db.prepare('SELECT id, parent_id FROM collections').all();
-  const out = [id];
-  for (let i = 0; i < out.length; i++) for (const c of all) if (c.parent_id === out[i]) out.push(c.id);
-  return out;
+function noteCounts() {
+  const m = new Map();
+  for (const n of vault.scan().notes) if (n.itemId) m.set(n.itemId, (m.get(n.itemId) || 0) + 1);
+  return m;
 }
 
 const getItem = id => decode(db.prepare('SELECT * FROM items WHERE id = ?').get(id));
 app.get('/api/items/:id', (req, res) => {
   const it = getItem(req.params.id);
   if (!it) return res.status(404).json({ error: '未找到' });
-  it.collection_ids = db.prepare('SELECT collection_id FROM item_collections WHERE item_id = ?').all(it.id).map(r => r.collection_id);
+  it.note_dir = vault.paperDir(it.id);
   res.json(it);
 });
 app.patch('/api/items/:id', (req, res) => {
   update('items', req.params.id, req.body, ['title', 'authors', 'year', 'venue', 'abstract', 'doi', 'arxiv', 'url', 'tags', 'starred', 'deleted', 'last_page', 'content']);
+  // Keep the paper's note folder named after its (possibly corrected) title
+  if (typeof req.body.title === 'string') {
+    const dir = vault.paperDir(req.params.id);
+    if (dir != null) { try { vault.moveFolder(dir, { name: req.body.title }); broadcast({ type: 'tree' }); } catch { /* name clash etc. */ } }
+  }
   const it = getItem(req.params.id);
   if (Object.keys(req.body).some(k => k !== 'last_page')) broadcast({ type: 'items' });
   res.json(it);
@@ -118,6 +156,9 @@ app.patch('/api/items/:id', (req, res) => {
 app.delete('/api/items/:id', (req, res) => {
   const it = getItem(req.params.id);
   if (!it) return res.json({ ok: true });
+  // The paper's notes are user content: move its folder to the vault trash rather than deleting
+  const dir = vault.paperDir(it.id);
+  if (dir != null) vault.trashPath(dir);
   if (it.file) fs.rmSync(path.join(FILES_DIR, it.file), { force: true });
   fs.rmSync(path.join(TEXT_DIR, `${it.id}.txt`), { force: true });
   db.prepare('DELETE FROM items WHERE id = ?').run(it.id);
@@ -149,7 +190,7 @@ function toBibtex(it) {
   return `@article{${first}${it.year}${word},\n${body}\n}`;
 }
 // ---------- Ingest ----------
-async function ingestBuffer(buf, { origName = '', collectionId = null, hint = {} } = {}) {
+async function ingestBuffer(buf, { origName = '', folder = '', hint = {} } = {}) {
   const hash = crypto.createHash('sha1').update(buf).digest('hex');
   const dup = db.prepare('SELECT id FROM items WHERE hash = ? AND deleted = 0').get(hash);
   if (dup) return { item: getItem(dup.id), duplicate: true };
@@ -157,9 +198,8 @@ async function ingestBuffer(buf, { origName = '', collectionId = null, hint = {}
   fs.writeFileSync(path.join(FILES_DIR, file), buf);
   const t = now();
   const title = hint.title || origName.replace(/\.pdf$/i, '') || '未命名文献';
-  db.prepare(`INSERT INTO items (id, title, file, orig_name, hash, arxiv, created, updated, meta_status)
-    VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'pending')`).run(id, title, file, origName, hash, hint.arxiv || '', t, t);
-  if (collectionId) db.prepare('INSERT OR IGNORE INTO item_collections (item_id, collection_id) VALUES (?, ?)').run(id, collectionId);
+  db.prepare(`INSERT INTO items (id, title, file, orig_name, hash, arxiv, folder, created, updated, meta_status)
+    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, 'pending')`).run(id, title, file, origName, hash, hint.arxiv || '', folder ? vault.ensureFolder(folder) : '', t, t);
   broadcast({ type: 'items' });
   indexItem(id, hint).catch(e => console.error('index failed', id, e));
   return { item: getItem(id), duplicate: false };
@@ -227,15 +267,15 @@ app.post('/api/upload', upload.array('files'), wrap(async (req, res) => {
       if (buf.subarray(0, 5).toString() !== '%PDF-') { out.push({ name: f.originalname, error: '不是 PDF 文件' }); continue; }
       // multer gives latin1 file names
       const name = Buffer.from(f.originalname, 'latin1').toString('utf8');
-      out.push(await ingestBuffer(buf, { origName: name, collectionId: req.body.collectionId || null }));
+      out.push(await ingestBuffer(buf, { origName: name, folder: req.body.folder || '' }));
     } finally { fs.rmSync(f.path, { force: true }); }
   }
   res.json(out);
 }));
 
 // Import by arXiv id / DOI / URL / title
-async function importPaper({ arxiv = '', pdfUrl = '', title = '', doi = '', url = '' }, fromItem = null, collectionId = null) {
-  if (!arxiv && !pdfUrl && !title && !doi && url) return importWeb(url, collectionId);
+async function importPaper({ arxiv = '', pdfUrl = '', title = '', doi = '', url = '' }, fromItem = null, folder = null) {
+  if (!arxiv && !pdfUrl && !title && !doi && url) return importWeb(url, folder);
   arxiv = (arxiv || '').replace(/^arxiv:/i, '').replace(/v\d+$/, '');
   const m = (pdfUrl || '').match(/arxiv\.org\/(?:abs|pdf)\/(\d{4}\.\d{4,5})/);
   if (!arxiv && m) arxiv = m[1];
@@ -252,33 +292,33 @@ async function importPaper({ arxiv = '', pdfUrl = '', title = '', doi = '', url 
   let buf;
   try { buf = await downloadPdf(dlUrl); }
   catch (e) {
-    if (/不是 PDF/.test(e.message) && /^https?:/.test(dlUrl)) return importWeb(dlUrl, collectionId);
+    if (/不是 PDF/.test(e.message) && /^https?:/.test(dlUrl)) return importWeb(dlUrl, folder);
     throw e;
   }
-  // Place into same collections as the source paper by default
-  const coll = collectionId || (fromItem && db.prepare('SELECT collection_id FROM item_collections WHERE item_id = ? LIMIT 1').get(fromItem.id)?.collection_id) || null;
-  const { item } = await ingestBuffer(buf, { origName: `${arxiv || 'download'}.pdf`, collectionId: coll, hint: { arxiv, title: meta?.title || title } });
+  // Papers imported from a citation land next to the paper that cited them
+  const target = folder ?? fromItem?.folder ?? '';
+  const { item } = await ingestBuffer(buf, { origName: `${arxiv || 'download'}.pdf`, folder: target, hint: { arxiv, title: meta?.title || title } });
   return item;
 }
 app.post('/api/import', wrap(async (req, res) => {
-  let { query = '', collectionId = null, as = '' } = req.body;
+  let { query = '', folder = '', as = '' } = req.body;
   query = query.trim();
   const arxivM = query.match(/(?:arxiv\.org\/(?:abs|pdf)\/|arxiv:)?(\d{4}\.\d{4,5})(?:v\d+)?$/i);
   const doiM = query.match(/\b(10\.\d{4,9}\/\S+)/);
   const isUrl = /^https?:\/\//i.test(query);
   // A non-arXiv web link: clip it as an article unless it is clearly a PDF
   if (isUrl && !arxivM && as !== 'paper' && (as === 'web' || !/\.pdf($|\?)/i.test(query))) {
-    return res.json(await importWeb(query, collectionId));
+    return res.json(await importWeb(query, folder));
   }
   const spec = arxivM ? { arxiv: arxivM[1] } : doiM ? { doi: doiM[1] } : isUrl ? { pdfUrl: query } : { title: query };
-  res.json(await importPaper(spec, null, collectionId));
+  res.json(await importPaper(spec, null, folder));
 }));
 
 // ---------- Web / blog clipping ----------
-async function importWeb(url, collectionId = null) {
+async function importWeb(url, folder = '') {
   const art = await fetchArticle(url);
   if (art.isPdf) {
-    const { item } = await ingestBuffer(art.buffer, { origName: url.split('/').pop() || 'download.pdf', collectionId });
+    const { item } = await ingestBuffer(art.buffer, { origName: url.split('/').pop() || 'download.pdf', folder: folder || '' });
     return item;
   }
   if (!art.markdown || art.markdown.length < 80) throw new Error('没能从该页面提取到正文，可能需要登录或是动态页面');
@@ -290,10 +330,9 @@ async function importWeb(url, collectionId = null) {
     return getItem(dup.id);
   }
   const id = uid();
-  db.prepare(`INSERT INTO items (id, kind, title, authors, year, venue, abstract, url, content, meta_status, created, updated)
-    VALUES (?, 'web', ?, ?, ?, ?, ?, ?, ?, 'ok', ?, ?)`)
-    .run(id, art.title, JSON.stringify(art.authors), art.year, art.venue, art.abstract, art.url, art.markdown, t, t);
-  if (collectionId) db.prepare('INSERT OR IGNORE INTO item_collections (item_id, collection_id) VALUES (?, ?)').run(id, collectionId);
+  db.prepare(`INSERT INTO items (id, kind, title, authors, year, venue, abstract, url, content, folder, meta_status, created, updated)
+    VALUES (?, 'web', ?, ?, ?, ?, ?, ?, ?, ?, 'ok', ?, ?)`)
+    .run(id, art.title, JSON.stringify(art.authors), art.year, art.venue, art.abstract, art.url, art.markdown, folder ? vault.ensureFolder(folder) : '', t, t);
   fs.writeFileSync(path.join(TEXT_DIR, `${id}.txt`), art.markdown);
   broadcast({ type: 'items' });
   return getItem(id);
@@ -301,7 +340,7 @@ async function importWeb(url, collectionId = null) {
 app.post('/api/items/:id/refetch', wrap(async (req, res) => {
   const it = getItem(req.params.id);
   if (it?.kind !== 'web') throw notFound();
-  res.json(await importWeb(it.url));
+  res.json(await importWeb(it.url, it.folder));
 }));
 
 app.post('/api/items/:id/reindex', wrap(async (req, res) => {
@@ -410,48 +449,64 @@ app.post('/api/annotations/:id/ai', wrap(async (req, res) => {
 }));
 app.post('/api/annotations/:id/ai/cancel', (req, res) => { cancelTask(req.params.id); res.json(getAnn(req.params.id)); });
 
-// ---------- Notes ----------
-const getNote = id => db.prepare('SELECT * FROM notes WHERE id = ?').get(id);
+// ---------- Notes (.md files in the vault) ----------
+// A note's id is its vault-relative path, e.g. "具身推理/ReAct …/读后笔记.md"
+const noteOut = n => ({ ...n, item_id: n.itemId ?? null, updated: n.mtime, item: n.itemId ? db.prepare('SELECT id, title FROM items WHERE id = ?').get(n.itemId) || null : null });
 app.get('/api/notes', (req, res) => {
-  const { item, collection, q } = req.query;
-  if (item) return res.json(db.prepare('SELECT * FROM notes WHERE item_id = ? ORDER BY updated DESC').all(item));
-  const where = ['n.item_id IS NULL'], args = [];
-  if (collection) {
-    const ids = descendants(collection);
-    where.push(`EXISTS (SELECT 1 FROM note_collections nc WHERE nc.note_id = n.id AND nc.collection_id IN (${ids.map(() => '?').join(',')}))`);
-    args.push(...ids);
+  const { item, folder, q } = req.query;
+  let list = q ? vault.searchNotes(q) : vault.scan().notes;
+  if (item) list = list.filter(n => n.itemId === item);
+  else {
+    list = list.filter(n => !n.itemId);            // standalone notes only
+    if (folder) list = list.filter(n => n.dir === folder || n.dir.startsWith(folder + '/'));
+    if (req.query.view === 'unfiled') list = list.filter(n => n.dir === '');
   }
-  if (q) { where.push('(n.title LIKE ? OR n.content LIKE ?)'); args.push(`%${q}%`, `%${q}%`); }
-  res.json(db.prepare(`SELECT n.*, (SELECT GROUP_CONCAT(collection_id) FROM note_collections nc WHERE nc.note_id = n.id) AS collection_ids
-    FROM notes n WHERE ${where.join(' AND ')} ORDER BY n.updated DESC`).all(...args)
-    .map(r => ({ ...r, collection_ids: r.collection_ids ? r.collection_ids.split(',') : [] })));
+  res.json(list.sort((a, b) => b.mtime - a.mtime).map(noteOut));
 });
-app.get('/api/notes/:id', (req, res) => {
-  const n = getNote(req.params.id);
-  if (!n) return res.status(404).json({ error: '未找到' });
-  res.json({ ...n, item: n.item_id ? db.prepare('SELECT id, title FROM items WHERE id = ?').get(n.item_id) : null });
-});
-app.post('/api/notes', (req, res) => {
-  const t = now(), id = uid();
-  db.prepare('INSERT INTO notes (id, item_id, title, content, created, updated) VALUES (?, ?, ?, ?, ?, ?)')
-    .run(id, req.body.item_id || null, req.body.title || '', req.body.content || '', t, t);
-  if (req.body.collectionId) db.prepare('INSERT OR IGNORE INTO note_collections (note_id, collection_id) VALUES (?, ?)').run(id, req.body.collectionId);
-  const n = getNote(id);
-  broadcast({ type: 'note', note: n });
+app.get('/api/note', wrap(async (req, res) => res.json(noteOut(vault.readNote(String(req.query.id || ''))))));
+// Create: {item_id} → inside that paper's folder; otherwise {folder}
+app.post('/api/notes', wrap(async (req, res) => {
+  const { item_id, folder = '', title, content = '' } = req.body;
+  let dir = folder;
+  if (item_id) {
+    const it = getItem(item_id);
+    if (!it) throw notFound();
+    dir = vault.ensurePaperDir(it);
+  }
+  const name = title || deriveTitle(content) || (item_id ? '笔记' : '未命名笔记');
+  const id = vault.createNote(dir, name, content);
+  const n = noteOut(vault.readNote(id));
+  broadcast({ type: 'note', note: n }); broadcast({ type: 'tree' });
   res.json(n);
-});
-app.patch('/api/notes/:id', (req, res) => {
-  update('notes', req.params.id, req.body, ['title', 'content']);
-  const n = getNote(req.params.id);
-  broadcast({ type: 'note', note: n, origin: req.get('x-client-id') || '' });
+}));
+// Save content; the file is renamed when the first heading changes (unless the user renamed it manually)
+app.put('/api/note', wrap(async (req, res) => {
+  let id = String(req.query.id || '');
+  const { content, title } = req.body;
+  if (typeof content === 'string') vault.writeNote(id, content);
+  const want = title ?? (req.body.autoTitle ? deriveTitle(content) : null);
+  let renamed = false;
+  if (want) {
+    const cur = id.split('/').pop().replace(/\.md$/i, '');
+    if (vault.safeName(want) !== cur) { id = vault.moveNote(id, { title: want }); renamed = true; }
+  }
+  const n = noteOut(vault.readNote(id));
+  broadcast({ type: 'note', note: n, origin: req.get('x-client-id') || '', renamedFrom: renamed ? String(req.query.id) : undefined });
+  if (renamed) broadcast({ type: 'tree' });
   res.json(n);
-});
-app.delete('/api/notes/:id', (req, res) => {
-  const n = getNote(req.params.id);
-  db.prepare('DELETE FROM notes WHERE id = ?').run(req.params.id);
-  if (n) broadcast({ type: 'note-deleted', id: n.id, item_id: n.item_id });
+}));
+app.delete('/api/note', wrap(async (req, res) => {
+  const id = String(req.query.id || '');
+  let itemId = null;
+  try { itemId = vault.readNote(id).itemId; } catch { /* already gone */ }
+  vault.trashPath(id);
+  broadcast({ type: 'note-deleted', id, item_id: itemId }); broadcast({ type: 'tree' });
   res.json({ ok: true });
-});
+}));
+function deriveTitle(content = '') {
+  const line = content.split('\n').find(l => l.trim()) || '';
+  return line.replace(/^#+\s*/, '').replace(/[*_`>]/g, '').trim().slice(0, 80);
+}
 
 // ---------- Settings ----------
 const SECRET_KEYS = ['llmApiKey', 'openalexKey'];
@@ -460,8 +515,12 @@ app.get('/api/settings', (req, res) => res.json(maskKey(getSettings())));
 app.put('/api/settings', (req, res) => {
   const patch = { ...req.body };
   for (const k of SECRET_KEYS) if (typeof patch[k] === 'string' && patch[k].startsWith('••••')) delete patch[k];
+  const prevVault = getSettings().vaultDir;
   setSettings(patch);
   configureSources(getSettings());
+  // Switching vaults (e.g. to an existing Obsidian vault): papers keep their DB rows and
+  // fall back to the root until their folders exist in the new vault
+  if (patch.vaultDir && patch.vaultDir !== prevVault) { vault.openVault(getSettings().vaultDir); broadcast({ type: 'tree' }); broadcast({ type: 'items' }); }
   res.json(maskKey(getSettings()));
 });
 app.get('/api/sources', (req, res) => res.json(sourceStatus()));
@@ -516,6 +575,69 @@ if (isProd) {
 }
 
 configureSources(getSettings());
+
+// ---------- Vault ----------
+vault.openVault(getSettings().vaultDir);
+// Changes made outside the app (Obsidian, Explorer, sync tools): refresh the tree and push new
+// content of any open .md so editors update in place
+vault.setVaultChangeHandler(({ external, files }) => {
+  if (!external) return;
+  broadcast({ type: 'tree' }); broadcast({ type: 'items' });
+  for (const f of files) {
+    if (!/\.md$/i.test(f)) continue;
+    try { broadcast({ type: 'note', note: noteOut(vault.readNote(f)), origin: 'external' }); } catch { /* deleted or moved */ }
+  }
+});
+migrateToVault();
+
+// One-time move of the old DB-based categories and notes into real folders / .md files.
+// The old tables are kept (renamed) as a backup rather than dropped.
+function migrateToVault() {
+  const has = t => db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(t);
+  if (!has('collections') || has('_old_collections')) return;
+  const colls = db.prepare('SELECT * FROM collections').all();
+  const byId = new Map(colls.map(c => [c.id, c]));
+  const pathOf = new Map();
+  const resolve = c => {
+    if (pathOf.has(c.id)) return pathOf.get(c.id);
+    const parent = c.parent_id && byId.get(c.parent_id) ? resolve(byId.get(c.parent_id)) : '';
+    const p = (parent ? parent + '/' : '') + vault.safeName(c.name, '分类');
+    pathOf.set(c.id, p);
+    return p;
+  };
+  for (const c of colls) vault.ensureFolder(resolve(c));
+  // A paper in several categories goes to the first one (folders can only hold it once)
+  for (const r of db.prepare('SELECT item_id, MIN(collection_id) cid FROM item_collections GROUP BY item_id').all()) {
+    const p = pathOf.get(r.cid);
+    if (p) db.prepare('UPDATE items SET folder = ? WHERE id = ?').run(p, r.item_id);
+  }
+  let moved = 0;
+  if (has('notes')) {
+    for (const n of db.prepare('SELECT * FROM notes').all()) {
+      let dir = '';
+      if (n.item_id) { const it = getItem(n.item_id); if (!it) continue; dir = vault.ensurePaperDir(it); }
+      else {
+        const nc = has('note_collections') && db.prepare('SELECT collection_id FROM note_collections WHERE note_id = ? LIMIT 1').get(n.id);
+        dir = (nc && pathOf.get(nc.collection_id)) || '';
+      }
+      vault.createNote(dir, n.title || deriveTitle(n.content) || '未命名笔记', n.content || '');
+      moved++;
+    }
+  }
+  db.exec(`ALTER TABLE collections RENAME TO _old_collections;
+    ALTER TABLE item_collections RENAME TO _old_item_collections;
+    ${has('notes') ? 'ALTER TABLE notes RENAME TO _old_notes;' : ''}
+    ${has('note_collections') ? 'ALTER TABLE note_collections RENAME TO _old_note_collections;' : ''}`);
+  console.log(`vault migration: ${colls.length} folders, ${moved} notes → ${vault.getVaultDir()}`);
+}
+app.post('/api/vault/open', (req, res) => {
+  // Opens the vault folder in the OS file manager (desktop convenience)
+  import('node:child_process').then(({ spawn }) => {
+    const cmd = process.platform === 'win32' ? 'explorer' : process.platform === 'darwin' ? 'open' : 'xdg-open';
+    spawn(cmd, [vault.getVaultDir()], { detached: true, stdio: 'ignore' }).on('error', () => {}).unref();
+  });
+  res.json({ ok: true, path: vault.getVaultDir() });
+});
 
 // Clean up stale "running" states from a previous crash
 db.prepare("UPDATE annotations SET ai_status = 'error', ai_log = ai_log || '\n(服务重启，任务中断)' WHERE ai_status = 'running'").run();

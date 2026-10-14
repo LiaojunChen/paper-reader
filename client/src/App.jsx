@@ -3,11 +3,12 @@ import { api, subscribe, fmtAuthors } from './api.js';
 import Reader from './Reader.jsx';
 import NoteEditor, { openNoteWindow } from './NoteEditor.jsx';
 import Settings from './Settings.jsx';
-import { CollectionTree, ItemDetail } from './Library.jsx';
+import { ItemDetail } from './Library.jsx';
+import FolderTree from './FolderTree.jsx';
 
 export default function App() {
-  const [collections, setCollections] = useState([]);
-  const [view, setView] = useState({ type: 'all' }); // all | starred | unfiled | trash | collection(id)
+  const [tree, setTree] = useState({ folders: [], notes: [], items: [], vault: '' });
+  const [view, setView] = useState({ type: 'all' }); // all | starred | trash | folder(path)
   const [items, setItems] = useState([]);
   const [standaloneNotes, setStandaloneNotes] = useState([]);
   const [q, setQ] = useState('');
@@ -22,28 +23,34 @@ export default function App() {
   const [sort, setSort] = useState(() => localStorage.getItem('sort') || 'created');
 
   const notify = useCallback(t => { setToast(t); setTimeout(() => setToast(''), 3500); }, []);
-  const loadCollections = () => api.get('/api/collections').then(setCollections);
-  const collectionId = view.type === 'collection' ? view.id : '';
+  const loadTree = useCallback(() => api.get('/api/tree').then(setTree), []);
+  // The folder new papers / notes go into: the folder being viewed, else the vault root
+  const folder = view.type === 'folder' ? view.path : '';
   const loadItems = useCallback(() => {
+    const scope = p => { if (view.type === 'folder') { if (view.path) p.set('folder', view.path); else p.set('view', 'unfiled'); } };
     const p = new URLSearchParams();
-    if (collectionId) p.set('collection', collectionId);
-    if (['starred', 'unfiled', 'trash'].includes(view.type)) p.set('view', view.type);
+    scope(p);
+    if (['starred', 'trash'].includes(view.type)) p.set('view', view.type);
     if (q) p.set('q', q);
     api.get(`/api/items?${p}`).then(setItems);
     const np = new URLSearchParams();
-    if (collectionId) np.set('collection', collectionId);
+    scope(np);
     if (q) np.set('q', q);
-    if (view.type === 'all' || view.type === 'collection' || view.type === 'unfiled') api.get(`/api/notes?${np}`).then(ns => setStandaloneNotes(view.type === 'unfiled' ? ns.filter(n => !n.collection_ids.length) : ns));
+    if (view.type === 'all' || view.type === 'folder') api.get(`/api/notes?${np}`).then(setStandaloneNotes);
     else setStandaloneNotes([]);
-  }, [collectionId, view.type, q]);
+  }, [view.type, view.path, q]);
+  const reloadAll = useCallback(() => Promise.all([loadTree(), loadItems()]), [loadTree, loadItems]);
 
-  useEffect(() => { loadCollections(); api.get('/api/settings').then(setSettings); }, []);
+  useEffect(() => { loadTree(); api.get('/api/settings').then(setSettings); }, [loadTree]);
   useEffect(() => { const t = setTimeout(loadItems, q ? 250 : 0); return () => clearTimeout(t); }, [loadItems, q]);
   useEffect(() => subscribe(m => {
-    if (m.type === 'items' || m.type === 'item') loadItems();
+    if (m.type === 'items' || m.type === 'item') { loadItems(); loadTree(); }
+    if (m.type === 'tree') { loadTree(); loadItems(); }
     if ((m.type === 'note' && !m.note.item_id) || (m.type === 'note-deleted' && !m.item_id)) loadItems();
+    // A note renamed by its heading: keep it selected under its new path
+    if (m.type === 'note' && m.renamedFrom) setSelected(s => s?.kind === 'note' && s.id === m.renamedFrom ? { ...s, id: m.note.id } : s);
     if (m.type === 'item' || m.type === 'items') setTabs(ts => ts); // titles refreshed on open
-  }), [loadItems]);
+  }), [loadItems, loadTree]);
   // Messages from note windows ("open parent paper")
   useEffect(() => {
     const h = e => { if (e.origin === location.origin && e.data?.type === 'open-item') openItem(e.data.id); };
@@ -81,7 +88,7 @@ export default function App() {
     if (!pdfs.length) return notify('请拖入 PDF 文件');
     const fd = new FormData();
     for (const f of pdfs) fd.append('files', f);
-    if (collectionId) fd.append('collectionId', collectionId);
+    if (folder) fd.append('folder', folder);
     notify(`正在上传 ${pdfs.length} 个文件…`);
     const res = await api.post('/api/upload', fd).catch(e => [{ error: e.message }]);
     const dup = res.filter(r => r.duplicate).length, err = res.filter(r => r.error);
@@ -91,8 +98,8 @@ export default function App() {
   }
 
   async function newNote() {
-    const n = await api.post('/api/notes', { content: '', collectionId: collectionId || null });
-    loadItems();
+    const n = await api.post('/api/notes', { content: '', folder });
+    reloadAll();
     setSelected({ kind: 'note', id: n.id });
   }
 
@@ -107,8 +114,10 @@ export default function App() {
     return arr.sort(by);
   }, [items, sort]);
 
-  const selItem = selected?.kind === 'item' ? items.find(i => i.id === selected.id) : null;
-  const viewName = { all: '我的文库', starred: '星标', unfiled: '未分类', trash: '回收站' }[view.type] || collections.find(c => c.id === view.id)?.name;
+  const selItem = selected?.kind === 'item' ? items.find(i => i.id === selected.id) || tree.items.find(i => i.id === selected.id) : null;
+  // What the tree highlights: the selected paper/note, else the folder being viewed
+  const treeSel = selected || (view.type === 'folder' ? { kind: 'folder', path: view.path } : null);
+  const viewName = { all: '全部文献', starred: '星标', trash: '回收站' }[view.type] || (view.path ? view.path.split('/').join(' / ') : '根目录（未归类）');
 
   return (
     <div className="app" onDragOver={e => { if ([...e.dataTransfer.types].includes('Files')) { e.preventDefault(); setDrag(true); } }}
@@ -120,7 +129,7 @@ export default function App() {
         if (/^https?:\/\//i.test(url.trim())) {
           e.preventDefault();
           notify('正在抓取网页…');
-          try { const it = await api.post('/api/import', { query: url.trim(), collectionId: collectionId || null }); notify(`已导入：${it.title}`); loadItems(); setSelected({ kind: 'item', id: it.id }); }
+          try { const it = await api.post('/api/import', { query: url.trim(), folder }); notify(`已导入：${it.title}`); reloadAll(); setSelected({ kind: 'item', id: it.id }); }
           catch (err) { notify(`导入失败：${err.message}`); }
         }
       }}>
@@ -142,10 +151,11 @@ export default function App() {
 
       <div className="workspace" style={{ display: activeTab === 'library' ? 'flex' : 'none' }}>
         <aside className="col-left">
-          <CollectionTree collections={collections} view={view} setView={v => { setView(v); setSelected(null); }} reload={loadCollections} onDropItems={async (cid, ids) => {
-            await api.post(`/api/collections/${cid}/items`, { itemIds: ids.filter(x => x.kind === 'item').map(x => x.id), noteIds: ids.filter(x => x.kind === 'note').map(x => x.id) });
-            notify('已添加到分类'); loadItems();
-          }} />
+          <FolderTree tree={tree} view={view} selected={treeSel} notify={notify} reload={reloadAll}
+            setView={v => { setView(v); setSelected(null); }}
+            onSelectFolder={path => { setView({ type: 'folder', path }); setSelected(null); }}
+            onSelectItem={id => setSelected({ kind: 'item', id })} onOpenItem={openItem}
+            onSelectNote={id => setSelected({ kind: 'note', id })} onOpenNote={openNoteWindow} />
         </aside>
         <section className="col-mid">
           <div className="mid-toolbar">
@@ -185,7 +195,7 @@ export default function App() {
                 onDragStart={e => e.dataTransfer.setData('text/x-items', JSON.stringify([{ kind: 'note', id: n.id }]))}
                 onClick={() => setSelected({ kind: 'note', id: n.id })} onDoubleClick={() => openNoteWindow(n.id)}>
                 <span className="c-star" /><span className="c-title"><span className="file-ic">📝</span>{n.title || '无标题笔记'}</span>
-                <span className="c-auth muted">独立笔记</span><span className="c-year" /><span className="c-badges" />
+                <span className="c-auth muted">{n.dir || '根目录'}</span><span className="c-year" /><span className="c-badges" />
               </div>
             ))}
             {!sorted.length && !standaloneNotes.length && (
@@ -198,19 +208,20 @@ export default function App() {
           </div>
         </section>
         <aside className="col-right">
-          {selItem ? <ItemDetail key={selItem.id} item={selItem} collections={collections} view={view} onOpen={() => openItem(selItem.id)} reload={loadItems} notify={notify}
+          {selItem ? <ItemDetail key={selItem.id} item={selItem} tree={tree} onOpen={() => openItem(selItem.id)} reload={reloadAll} notify={notify}
             onOpenNote={id => setSelected({ kind: 'note', id, parent: selItem.id })} />
-            : selected?.kind === 'note' ? <NoteEditor key={selected.id} id={selected.id} onDeleted={() => { setSelected(selected.parent ? { kind: 'item', id: selected.parent } : null); loadItems(); }}
+            : selected?.kind === 'note' ? <NoteEditor key={selected.id} id={selected.id} onDeleted={() => { setSelected(selected.parent ? { kind: 'item', id: selected.parent } : null); reloadAll(); }}
+              onRenamed={nid => { setSelected(s => s && { ...s, id: nid }); reloadAll(); }}
               onBack={selected.parent ? () => setSelected({ kind: 'item', id: selected.parent }) : undefined} onOpenItem={id => openItem(id)} />
-              : <div className="empty-hint pad">选择一个条目查看详情。<br /><br />双击打开阅读器 · 拖动条目到左侧分类 · 支持多标签页同时阅读</div>}
+              : <div className="empty-hint pad">选择一个条目查看详情。<br /><br />双击打开阅读器 · 把文献拖到左侧文件夹 · 笔记是笔记库里真实的 .md 文件</div>}
         </aside>
       </div>
 
       {tabs.map(t => (
-        <Reader key={t.id} itemId={t.id} settings={settings} visible={activeTab === t.id} onOpenItem={openItem} onItemChanged={() => loadItems()} />
+        <Reader key={t.id} itemId={t.id} settings={settings} visible={activeTab === t.id} onOpenItem={openItem} onItemChanged={() => reloadAll()} />
       ))}
 
-      {importOpen && <ImportDialog initial={typeof importOpen === 'string' ? importOpen : ''} collectionId={collectionId} onClose={() => setImportOpen(false)} onDone={it => { setImportOpen(false); notify(`已导入：${it.title}`); loadItems(); setSelected({ kind: 'item', id: it.id }); }} />}
+      {importOpen && <ImportDialog initial={typeof importOpen === 'string' ? importOpen : ''} folder={folder} onClose={() => setImportOpen(false)} onDone={it => { setImportOpen(false); notify(`已导入：${it.title}`); reloadAll(); setSelected({ kind: 'item', id: it.id }); }} />}
       {showSettings && <Settings settings={settings} onClose={() => setShowSettings(false)} onSaved={s => { setSettings(s); setShowSettings(false); notify('设置已保存'); }} />}
       {drag && <div className="drop-mask">松开以添加 PDF 到「{viewName}」</div>}
       {toast && <div className="toast">{toast}</div>}
@@ -218,14 +229,14 @@ export default function App() {
   );
 }
 
-function ImportDialog({ collectionId, onClose, onDone, initial = '' }) {
+function ImportDialog({ folder, onClose, onDone, initial = '' }) {
   const [v, setV] = useState(initial);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState('');
   const [asWeb, setAsWeb] = useState(false);
   const go = async () => {
     setBusy(true); setErr('');
-    try { onDone(await api.post('/api/import', { query: v, collectionId: collectionId || null, as: asWeb ? 'web' : '' })); }
+    try { onDone(await api.post('/api/import', { query: v, folder, as: asWeb ? 'web' : '' })); }
     catch (e) { setErr(e.message); setBusy(false); }
   };
   return (

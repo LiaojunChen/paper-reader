@@ -3,14 +3,21 @@ import { api, subscribe, CLIENT_ID } from './api.js';
 import Markdown from './Markdown.jsx';
 import LiveMarkdown from './LiveMarkdown.jsx';
 
+// Note ids are vault paths (may contain / and CJK), so always encode them
+export const noteUrl = id => `/api/note?id=${encodeURIComponent(id)}`;
 export function openNoteWindow(id) {
-  window.open(`/?note=${id}`, `note-${id}`, 'width=760,height=900,menubar=no,toolbar=no');
+  window.open(`/?note=${encodeURIComponent(id)}`, `note-${id.replace(/[^w]/g, '_')}`, 'width=760,height=900,menubar=no,toolbar=no');
 }
 
 // Cross-window channel: reader → note window ("insert quote")
 export const noteChannel = typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('paper-reader-notes') : null;
 
-const NoteEditor = forwardRef(function NoteEditor({ id, onTitle, onDeleted, onBack, showOpenWindow = true, onOpenItem }, ref) {
+const NoteEditor = forwardRef(function NoteEditor({ id: initialId, onTitle, onDeleted, onBack, showOpenWindow = true, onOpenItem, onRenamed }, ref) {
+  // The file is renamed when its first heading changes, so the id can move while editing
+  const [id, setId] = useState(initialId);
+  const idRef = useRef(initialId);
+  idRef.current = id;
+  useEffect(() => { setId(initialId); }, [initialId]);
   const [note, setNote] = useState(null);
   const [content, setContent] = useState('');
   const [mode, setMode] = useState(() => localStorage.getItem('noteMode') || 'live');
@@ -23,16 +30,18 @@ const NoteEditor = forwardRef(function NoteEditor({ id, onTitle, onDeleted, onBa
 
   useEffect(() => {
     let live = true;
-    api.get(`/api/notes/${id}`).then(n => { if (live) { setNote(n); setContent(n.content); } });
+    api.get(noteUrl(id)).then(n => { if (live) { setNote(n); setContent(n.content); } }).catch(() => live && onDeleted?.());
     const off = subscribe(m => {
-      if (m.type === 'note' && m.note.id === id && m.origin !== CLIENT_ID && m.note.content !== latest.current) {
+      if (m.type === 'note' && m.renamedFrom === idRef.current && m.origin !== CLIENT_ID) { setId(m.note.id); return; }
+      if (m.type === 'note' && m.note.id === idRef.current && m.origin !== CLIENT_ID && m.note.content !== latest.current) {
         setNote(n => ({ ...n, ...m.note })); setContent(m.note.content);
       }
-      if (m.type === 'note-deleted' && m.id === id) onDeleted?.();
+      if (m.type === 'note-deleted' && m.id === idRef.current) onDeleted?.();
     });
-    return () => { live = false; off(); flush(); };
+    return () => { live = false; off(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [id]);
+  useEffect(() => () => flush(), []);   // save pending edits when the editor closes
 
   const title = deriveTitle(content);
   useEffect(() => { onTitle?.(title); }, [title, onTitle]);
@@ -40,7 +49,11 @@ const NoteEditor = forwardRef(function NoteEditor({ id, onTitle, onDeleted, onBa
   function flush() {
     if (!timer.current) return;
     clearTimeout(timer.current); timer.current = null;
-    api.patch(`/api/notes/${id}`, { content: latest.current, title: deriveTitle(latest.current) }).then(() => setSaved(true));
+    const cur = idRef.current;
+    api.put(noteUrl(cur), { content: latest.current, autoTitle: true }).then(n => {
+      setSaved(true);
+      if (n.id !== cur) { setId(n.id); onRenamed?.(n.id, cur); }
+    }).catch(() => setSaved(false));
   }
   function change(v) {
     setContent(v); setSaved(false);
@@ -65,7 +78,7 @@ const NoteEditor = forwardRef(function NoteEditor({ id, onTitle, onDeleted, onBa
 
   useEffect(() => {
     if (!noteChannel) return;
-    const h = e => { if (e.data?.noteId === id && e.data.text) insert(e.data.text); };
+    const h = e => { if (e.data?.noteId === idRef.current && e.data.text) insert(e.data.text); };
     noteChannel.addEventListener('message', h);
     return () => noteChannel.removeEventListener('message', h);
   });
@@ -86,6 +99,7 @@ const NoteEditor = forwardRef(function NoteEditor({ id, onTitle, onDeleted, onBa
       <div className="note-bar">
         {onBack && <button className="btn ghost" onClick={onBack}>← 返回</button>}
         {note.item && <button className="link note-parent" title="打开所属论文" onClick={() => onOpenItem?.(note.item.id)}>📄 {note.item.title}</button>}
+        <span className="note-path muted tiny" title={id}>{id.split('/').slice(0, -1).join(' / ') || '笔记库根目录'}</span>
         <span className="spacer" />
         <div className="seg">
           {[['live', '实时'], ['edit', '源码'], ['preview', '预览']].map(([k, l]) => (
@@ -95,7 +109,7 @@ const NoteEditor = forwardRef(function NoteEditor({ id, onTitle, onDeleted, onBa
         </div>
         <span className="muted tiny">{saved ? '已保存' : '保存中…'}</span>
         {showOpenWindow && <button className="btn ghost" title="新窗口打开（边看论文边记）" onClick={() => { flush(); openNoteWindow(id); }}>⧉</button>}
-        <button className="btn ghost danger" title="删除笔记" onClick={async () => { if (confirm('删除这篇笔记？')) { await api.del(`/api/notes/${id}`); onDeleted?.(); } }}>删除</button>
+        <button className="btn ghost danger" title="删除笔记（移到笔记库的 .trash）" onClick={async () => { if (confirm('删除这篇笔记？文件会移到笔记库的 .trash 文件夹。')) { clearTimeout(timer.current); timer.current = null; await api.del(noteUrl(id)); onDeleted?.(); } }}>删除</button>
       </div>
       <div className={`note-body ${mode}`} onKeyDown={e => { if (e.key === 's' && (e.ctrlKey || e.metaKey)) { e.preventDefault(); timer.current = 1; flush(); } }}>
         {mode === 'live' && (

@@ -14,10 +14,6 @@ export const db = new DatabaseSync(path.join(DATA_DIR, 'library.db'));
 db.exec(`
 PRAGMA journal_mode = WAL;
 PRAGMA foreign_keys = ON;
-CREATE TABLE IF NOT EXISTS collections (
-  id TEXT PRIMARY KEY, name TEXT NOT NULL, parent_id TEXT REFERENCES collections(id) ON DELETE CASCADE,
-  created INTEGER NOT NULL
-);
 CREATE TABLE IF NOT EXISTS items (
   id TEXT PRIMARY KEY, title TEXT NOT NULL DEFAULT '', authors TEXT NOT NULL DEFAULT '[]',
   year TEXT DEFAULT '', venue TEXT DEFAULT '', abstract TEXT DEFAULT '', doi TEXT DEFAULT '',
@@ -26,21 +22,6 @@ CREATE TABLE IF NOT EXISTS items (
   kind TEXT NOT NULL DEFAULT 'paper', content TEXT DEFAULT '',
   hash TEXT DEFAULT '', num_pages INTEGER DEFAULT 0, last_page INTEGER DEFAULT 1, starred INTEGER DEFAULT 0, deleted INTEGER DEFAULT 0,
   created INTEGER NOT NULL, updated INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS item_collections (
-  item_id TEXT REFERENCES items(id) ON DELETE CASCADE,
-  collection_id TEXT REFERENCES collections(id) ON DELETE CASCADE,
-  PRIMARY KEY (item_id, collection_id)
-);
-CREATE TABLE IF NOT EXISTS notes (
-  id TEXT PRIMARY KEY, item_id TEXT REFERENCES items(id) ON DELETE CASCADE,
-  title TEXT NOT NULL DEFAULT '', content TEXT NOT NULL DEFAULT '',
-  created INTEGER NOT NULL, updated INTEGER NOT NULL
-);
-CREATE TABLE IF NOT EXISTS note_collections (
-  note_id TEXT REFERENCES notes(id) ON DELETE CASCADE,
-  collection_id TEXT REFERENCES collections(id) ON DELETE CASCADE,
-  PRIMARY KEY (note_id, collection_id)
 );
 CREATE TABLE IF NOT EXISTS annotations (
   id TEXT PRIMARY KEY, item_id TEXT NOT NULL REFERENCES items(id) ON DELETE CASCADE,
@@ -52,7 +33,8 @@ CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
 `);
 
 // Add columns introduced after the first release
-for (const [col, decl] of [['kind', "TEXT NOT NULL DEFAULT 'paper'"], ['content', "TEXT DEFAULT ''"]]) {
+// folder = vault-relative path of the category folder the paper lives in ('' = vault root / 未分类)
+for (const [col, decl] of [['kind', "TEXT NOT NULL DEFAULT 'paper'"], ['content', "TEXT DEFAULT ''"], ['folder', "TEXT NOT NULL DEFAULT ''"]]) {
   const has = db.prepare('SELECT 1 FROM pragma_table_info(?) WHERE name = ?').get('items', col);
   if (!has) db.exec(`ALTER TABLE items ADD COLUMN ${col} ${decl}`);
 }
@@ -90,6 +72,7 @@ export function getSettings() {
   return {
     llmProvider: 'openai', llmBaseUrl: 'https://api.openai.com/v1', llmApiKey: '', llmModel: 'gpt-4o-mini',
     targetLang: '简体中文', agentCommand: 'claude', agentModel: '', agentMaxBudget: '1', openalexKey: '',
+    vaultDir: path.join(DATA_DIR, 'vault'),
     ...s,
   };
 }
