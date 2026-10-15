@@ -1,5 +1,6 @@
 import { useState } from 'react';
 import { api, COLORS, COLOR_LABEL_DEFAULT } from './api.js';
+import { setPresetCache } from './AgentComposer.jsx';
 
 const PRESETS = {
   openai: { llmProvider: 'openai', llmBaseUrl: 'https://api.openai.com/v1', llmModel: 'gpt-4o-mini' },
@@ -14,7 +15,13 @@ export default function Settings({ settings, onClose, onSaved }) {
   const [s, setS] = useState({ colorLabels: COLOR_LABEL_DEFAULT, ...settings, uiScale: +localStorage.getItem('uiScale') || 1 });
   const [testing, setTesting] = useState('');
   const set = (k, v) => setS(x => ({ ...x, [k]: v }));
-  const save = async () => { localStorage.setItem('uiScale', s.uiScale || 1); onSaved(await api.put('/api/settings', s)); };
+  const save = async () => {
+    localStorage.setItem('uiScale', s.uiScale || 1);
+    const body = { ...s, agentPresets: (s.agentPresets || []).filter(p => p.label?.trim() && p.text?.trim()) };
+    const saved = await api.put('/api/settings', body);
+    setPresetCache(saved.agentPresets);
+    onSaved(saved);
+  };
   const cancel = () => { document.documentElement.style.setProperty('--ui-scale', +localStorage.getItem('uiScale') || 1); onClose(); };
   const test = async () => {
     await api.put('/api/settings', s);
@@ -59,6 +66,18 @@ export default function Settings({ settings, onClose, onSaved }) {
         <div className="info-row">
           {inp('agentModel', '模型（留空=默认，可填 sonnet / opus / haiku）')}
           {inp('agentMaxBudget', '单任务预算上限 USD')}
+        </div>
+        <div className="info-field"><span>快捷指令（派给 AI 时一键发送；也可以在批注的指令框里点 ⚙ 管理）</span>
+          {(s.agentPresets || []).map((p, i) => (
+            <div key={i} className="ac-preset-row">
+              <input className="ac-label" value={p.label} maxLength={12} placeholder="名称"
+                onChange={e => set('agentPresets', s.agentPresets.map((x, j) => j === i ? { ...x, label: e.target.value } : x))} />
+              <textarea className="ac-ptext" rows={2} value={p.text} placeholder="发给 AI 的指令"
+                onChange={e => set('agentPresets', s.agentPresets.map((x, j) => j === i ? { ...x, text: e.target.value } : x))} />
+              <button className="icon" title="删除" onClick={() => set('agentPresets', s.agentPresets.filter((_, j) => j !== i))}>✕</button>
+            </div>
+          ))}
+          <div><button className="link" onClick={() => set('agentPresets', [...(s.agentPresets || []), { label: '新指令', text: '' }])}>＋ 添加快捷指令</button></div>
         </div>
 
         <div className="set-sec">界面</div>

@@ -33,6 +33,11 @@ CREATE TABLE IF NOT EXISTS settings (key TEXT PRIMARY KEY, value TEXT);
 `);
 
 // Add columns introduced after the first release
+// ai_instruction = the instruction the user sent with the latest 派给 AI request
+{
+  const has = db.prepare('SELECT 1 FROM pragma_table_info(?) WHERE name = ?').get('annotations', 'ai_instruction');
+  if (!has) db.exec("ALTER TABLE annotations ADD COLUMN ai_instruction TEXT DEFAULT ''");
+}
 // folder = vault-relative path of the category folder the paper lives in ('' = vault root / 未分类)
 for (const [col, decl] of [['kind', "TEXT NOT NULL DEFAULT 'paper'"], ['content', "TEXT DEFAULT ''"], ['folder', "TEXT NOT NULL DEFAULT ''"]]) {
   const has = db.prepare('SELECT 1 FROM pragma_table_info(?) WHERE name = ?').get('items', col);
@@ -73,6 +78,15 @@ export function getSettings() {
     llmProvider: 'openai', llmBaseUrl: 'https://api.openai.com/v1', llmApiKey: '', llmModel: 'gpt-4o-mini',
     targetLang: '简体中文', agentCommand: 'claude', agentModel: '', agentMaxBudget: '1', openalexKey: '',
     vaultDir: path.join(DATA_DIR, 'vault'),
+    // Quick instructions for 派给 AI; editable in the composer and in settings
+    agentPresets: [
+      { label: '解释', text: '解释这段内容的含义和背后的原理，必要时结合论文上下文。' },
+      { label: '查引用', text: '检索批注里提到的被引论文，说明它的核心方法，以及本文是怎么借鉴或改进它的。' },
+      { label: '找相关工作', text: '检索与这段内容相关的近期工作（优先 2023 年以后），列出 3-5 篇并各用一句话说明区别，附链接。' },
+      { label: '找代码', text: '找到这篇论文或这里提到的方法的官方代码 / 复现实现，给出仓库链接并说明关键文件在哪。' },
+      { label: '下载论文', text: '把这里提到的论文导入我的文库。' },
+      { label: '批判', text: '以审稿人视角指出这段论述的假设、局限和可能的反例。' },
+    ],
     ...s,
   };
 }

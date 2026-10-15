@@ -16,6 +16,7 @@ const SYSTEM = `你是嵌入在论文阅读器里的科研助手。用户在阅�
 - references.json：当前论文解析出的参考文献列表 [{n, raw, arxiv, title?}]，n 为正文中引用编号
 - task.json：批注信息（高亮原文、用户的批注/问题、涉及的引用编号）
 要求：
+0. task.json 里的 instruction 是用户这次给你的具体指令，优先按它执行；user_comment 和 highlighted_text 是背景。instruction 为空时，把 user_comment 当作任务。有 previous_ai_reply 时说明是追问，在上次回答的基础上补充，不要整段重复。
 1. 先读 task.json，必要时读 paper.txt / references.json 定位上下文。
 2. 涉及被引论文时，用 WebSearch / WebFetch 检索（优先 arxiv.org/abs、官方页面、GitHub），读到实质内容再回答，不要凭空编造。
 3. 用中文回答，Markdown 格式，简洁有信息量，关键结论附来源链接。
@@ -68,7 +69,8 @@ export function runTask(annId, { importer, instruction = '' } = {}) {
   const item = decode(db.prepare('SELECT * FROM items WHERE id = ?').get(ann.item_id));
   const s = getSettings();
   const cwd = workspaceFor(item);
-  const refNums = [...new Set([...(ann.text + ' ' + ann.comment).matchAll(/\[(\d+(?:\s*[-–,]\s*\d+)*)\]/g)]
+  instruction = String(instruction || '').slice(0, 4000);
+  const refNums = [...new Set([...(ann.text + ' ' + ann.comment + ' ' + instruction).matchAll(/\[(\d+(?:\s*[-–,]\s*\d+)*)\]/g)]
     .flatMap(m => expandCite(m[1])))];
   if (ann.ref_index) refNums.unshift(ann.ref_index);
   const task = {
@@ -76,7 +78,7 @@ export function runTask(annId, { importer, instruction = '' } = {}) {
     page: ann.page,
     highlighted_text: ann.text,
     user_comment: ann.comment,
-    extra_instruction: instruction,
+    instruction: instruction || '',
     previous_ai_reply: ann.ai_reply || undefined,
     cited_references: refNums.map(n => (item.refs || []).find(r => r.n === n)).filter(Boolean),
   };
@@ -96,7 +98,7 @@ export function runTask(annId, { importer, instruction = '' } = {}) {
     update('annotations', annId, { ai_log: log.slice(-40).join('\n') }, ['ai_log']);
     emitAnn(annId);
   };
-  update('annotations', annId, { ai_status: 'running', ai_log: '启动 Claude Code…' }, ['ai_status', 'ai_log']);
+  update('annotations', annId, { ai_status: 'running', ai_log: '启动 Claude Code…', ai_instruction: instruction || '' }, ['ai_status', 'ai_log', 'ai_instruction']);
   emitAnn(annId);
 
   const cmd = s.agentCommand || 'claude';

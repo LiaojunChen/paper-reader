@@ -91,16 +91,18 @@ export default function Reader({ itemId, settings, onOpenItem, onItemChanged, vi
   // editId = {id, n}: the card enters edit mode when it sees a new n for its id (works for new and existing cards)
   const editSeq = useRef(0);
   const startEdit = id => setEditId({ id, n: ++editSeq.current });
+  const [askId, setAskId] = useState(null);   // same one-shot pattern, for the AI instruction box
+  const startAsk = id => setAskId({ id, n: ++editSeq.current });
   async function commentOn() {
     const a = await createAnn();
     if (!a) return;
     setTab('annotations'); setActiveId(a.id); startEdit(a.id);
   }
+  // 🤖 on a selection: highlight it, then open the instruction box on that sticker (nothing is sent yet)
   async function askAI() {
-    const a = await createAnn({ color: 'purple', comment: '解释这段内容，并检索相关工作' });
+    const a = await createAnn({ color: 'purple' });
     if (!a) return;
-    setTab('annotations'); setActiveId(a.id);
-    onAnnChanged(await api.post(`/api/annotations/${a.id}/ai`));
+    setTab('annotations'); setActiveId(a.id); startAsk(a.id);
   }
   function translate(mode = 'translate') {
     if (!sel) return;
@@ -161,7 +163,7 @@ export default function Reader({ itemId, settings, onOpenItem, onItemChanged, vi
     api.post(`/api/items/${itemId}/annotations`, {
       page, color: 'purple', text: `[${n}] ${data.meta?.title || data.title || data.raw.slice(0, 160)}`, rects: [], ref_index: n,
       comment: '',
-    }).then(a => { setAnns(l => upsert(l, a)); setTab('annotations'); setActiveId(a.id); startEdit(a.id); });
+    }).then(a => { setAnns(l => upsert(l, a)); setTab('annotations'); setActiveId(a.id); startAsk(a.id); });
   }
 
   // ---- keyboard ----
@@ -323,7 +325,7 @@ export default function Reader({ itemId, settings, onOpenItem, onItemChanged, vi
           ))}
         </div>
         <div className="tab-body">
-          {tab === 'annotations' && <AnnotationsPanel annotations={anns} activeId={activeId} editId={editId} colorLabels={settings.colorLabels}
+          {tab === 'annotations' && <AnnotationsPanel annotations={anns} activeId={activeId} editId={editId} askId={askId} colorLabels={settings.colorLabels}
             onFocus={a => { setActiveId(a.id); if (a.rects?.length) pdf.current?.goToAnnotation(a); }} onChanged={onAnnChanged} />}
           {tab === 'cite' && (
             !cite ? <div className="empty-hint">点击正文中的引用编号（如 [39]、[29–32]）在这里查看文献详情，不会打断阅读位置。<br />鼠标悬停即可预览。</div>

@@ -252,6 +252,23 @@ body.is-resizing iframe, body.is-resizing .pdf-container { pointer-events: none;
 .ai-progress { font-size: 0.85rem; color: var(--muted); margin-top: 0.2rem; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .ai-log { font-size: 0.82rem; font-family: var(--mono); background: #f5f6f8; padding: 0.45rem; border-radius: var(--radius-sm); max-height: 11rem; overflow: auto; white-space: pre-wrap; margin: 0.3rem 0; }
 .ai-reply { font-size: 0.98rem; margin-top: 0.3rem; }
+.ai-instr { font-size: 0.85rem; color: var(--text-2); background: #f4f1fd; border-radius: var(--radius-sm); padding: 0.25rem 0.5rem; margin-top: 0.3rem; white-space: pre-wrap; word-break: break-word; }
+.link.ai.on { background: #f0ecfd; }
+
+/* 派给 AI: instruction box under a sticker */
+.agent-composer { margin-top: 0.55rem; background: #fff; border: 1px solid #d9d0f6; border-radius: var(--radius); padding: 0.55rem; cursor: auto; box-shadow: 0 0.1rem 0.4rem rgba(107,79,208,.08); }
+.ac-presets { display: flex; flex-wrap: wrap; gap: 0.3rem; margin-bottom: 0.45rem; }
+.ac-presets .chip { background: #f6f3fe; border-color: #e3dcfa; color: #4d3aa8; }
+.ac-presets .chip:hover { background: #ece6fd; border-color: #c9bcf3; }
+.ac-presets .chip.ghost { background: transparent; border-style: dashed; color: var(--muted); }
+.ac-input { width: 100%; resize: none; min-height: 2.6rem; line-height: 1.55; font-size: 0.95rem; }
+.ac-row { display: flex; align-items: center; gap: 0.4rem; margin-top: 0.4rem; flex-wrap: wrap; }
+.ac-row .btn { height: 1.9rem; }
+.ac-title { font-weight: 650; margin-bottom: 0.4rem; }
+.ac-preset-row { display: flex; gap: 0.35rem; align-items: flex-start; margin-bottom: 0.4rem; }
+.ac-label { width: 5.5rem; flex: none; }
+.ac-ptext { flex: 1; min-width: 0; resize: vertical; font-size: 0.9rem; line-height: 1.5; }
+.ac-ops { display: flex; flex-direction: column; flex: none; }
 
 /* citation side panel */
 .cite-panel { padding: 0.8rem 1rem; }

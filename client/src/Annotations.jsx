@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from 'react';
 import { api, COLORS, fmtDate } from './api.js';
 import Markdown from './Markdown.jsx';
+import AgentComposer from './AgentComposer.jsx';
 
 export function ColorDots({ value, onChange, size = 16 }) {
   return (
@@ -15,12 +16,13 @@ export function ColorDots({ value, onChange, size = 16 }) {
 
 const STATUS = { running: '🤖 AI 处理中…', done: '🤖 AI 已回复', error: '⚠️ AI 任务失败', cancelled: '已取消' };
 
-export function AnnotationCard({ a, active, onFocus, onChange, onDelete, onAI, onCancel, autoEdit }) {
+export function AnnotationCard({ a, active, onFocus, onChange, onDelete, onAI, onCancel, autoEdit, openAsk }) {
   const [editing, setEditing] = useState(!!autoEdit);
   const [draft, setDraft] = useState(a.comment);
   const [showLog, setShowLog] = useState(false);
-  const [instr, setInstr] = useState('');
   const [askOpen, setAskOpen] = useState(false);
+  // Opened from outside (toolbar 🤖 / A key / Ctrl+Shift+Enter): show the instruction box
+  useEffect(() => { if (openAsk) { setAskOpen(true); ref.current?.scrollIntoView({ block: 'nearest' }); } }, [openAsk]);
   const ref = useRef(null);
   const ta = useRef(null);
   useEffect(() => { if (!editing) setDraft(a.comment); }, [a.comment, editing]);
@@ -45,12 +47,13 @@ export function AnnotationCard({ a, active, onFocus, onChange, onDelete, onAI, o
       </div>
       {a.text && <blockquote className="sticker-quote">{a.text}</blockquote>}
       {editing ? (
-        <textarea ref={ta} className="sticker-input" value={draft} placeholder="写下批注 / 问 AI 的问题…（Ctrl+Enter 保存，Ctrl+Shift+Enter 保存并派给 AI）"
+        <textarea ref={ta} className="sticker-input" value={draft} placeholder="写下批注…（Ctrl+Enter 保存，Ctrl+Shift+Enter 保存并打开 AI 指令框）"
           onClick={e => e.stopPropagation()} onChange={e => setDraft(e.target.value)} onBlur={save}
           onKeyDown={e => {
             if (e.key === 'Enter' && (e.ctrlKey || e.metaKey)) {
               e.preventDefault(); setEditing(false);
-              onChange({ comment: draft }).then(() => e.shiftKey && onAI(a));
+              // Ctrl+Shift+Enter: save, then open the instruction box (comment is the default task)
+              onChange({ comment: draft }).then(() => e.shiftKey && setAskOpen(true));
             } else if (e.key === 'Escape') { setDraft(a.comment); setEditing(false); }
           }} />
       ) : (
@@ -67,6 +70,7 @@ export function AnnotationCard({ a, active, onFocus, onChange, onDelete, onAI, o
             {a.ai_log && <button className="link" onClick={() => setShowLog(!showLog)}>{showLog ? '隐藏过程' : '过程'}</button>}
             {a.ai_status === 'running' && <button className="link" onClick={() => onCancel(a)}>取消</button>}
           </div>
+          {a.ai_instruction && <div className="ai-instr" title="这次派给 AI 的指令">📌 {a.ai_instruction}</div>}
           {a.ai_status === 'running' && <div className="ai-progress">{(a.ai_log || '').split('\n').slice(-1)[0]}</div>}
           {showLog && <pre className="ai-log">{a.ai_log}</pre>}
           {a.ai_reply && <Markdown className="ai-reply" text={a.ai_reply} />}
@@ -75,25 +79,21 @@ export function AnnotationCard({ a, active, onFocus, onChange, onDelete, onAI, o
       <div className="sticker-actions" onClick={e => e.stopPropagation()}>
         <button className="link" onClick={() => setEditing(true)}>编辑</button>
         {a.ai_status !== 'running' && (
-          <>
-            <button className="link ai" title="派给 AI：自动检索并在此回复" onClick={() => onAI(a)}>{a.ai_reply ? '🤖 重新派给 AI' : '🤖 派给 AI'}</button>
-            {a.ai_reply && <button className="link" onClick={() => setAskOpen(!askOpen)}>追问</button>}
-          </>
+          <button className={`link ai ${askOpen ? 'on' : ''}`} title="写一条指令（或选快捷指令）派给 AI" onClick={() => setAskOpen(!askOpen)}>
+            {a.ai_reply ? '🤖 追问 / 重新派' : '🤖 派给 AI'}
+          </button>
         )}
         <span className="spacer" />
         <span className="muted tiny">{fmtDate(a.updated)}</span>
       </div>
-      {askOpen && (
-        <div className="followup" onClick={e => e.stopPropagation()}>
-          <input value={instr} placeholder="追问 AI，例如：再对比一下 CAMEL 的做法" onChange={e => setInstr(e.target.value)}
-            onKeyDown={e => { if (e.key === 'Enter' && instr.trim()) { onAI(a, instr); setInstr(''); setAskOpen(false); } }} />
-        </div>
+      {askOpen && a.ai_status !== 'running' && (
+        <AgentComposer annotation={a} followUp={!!a.ai_reply} onClose={() => setAskOpen(false)} onSend={text => onAI(a, text)} />
       )}
     </div>
   );
 }
 
-export default function AnnotationsPanel({ annotations, activeId, editId, onFocus, onChanged, colorLabels }) {
+export default function AnnotationsPanel({ annotations, activeId, editId, askId, onFocus, onChanged, colorLabels }) {
   const [q, setQ] = useState('');
   const [color, setColor] = useState('');
   const [onlyAI, setOnlyAI] = useState(false);
@@ -131,9 +131,10 @@ export default function AnnotationsPanel({ annotations, activeId, editId, onFocu
       </div>
       {runningCount > 0 && <div className="ai-running-banner">🤖 {runningCount} 个 AI 任务进行中</div>}
       <div className="stickers">
-        {!list.length && <div className="empty-hint">选中文字即可高亮/批注。<br />在批注里写问题，点「🤖 派给 AI」，AI 会自动检索并回复在批注里；也可以写"帮我下载这篇论文"。</div>}
+        {!list.length && <div className="empty-hint">选中文字即可高亮/批注。<br />点「🤖 派给 AI」写一条指令（或选快捷指令），AI 会检索并把结果回复在批注里；也可以让它"把这篇论文下载到文库"。</div>}
         {list.map(a => (
-          <AnnotationCard key={a.id} a={a} active={a.id === activeId} autoEdit={editId?.id === a.id ? editId.n : 0} onFocus={onFocus}
+          <AnnotationCard key={a.id} a={a} active={a.id === activeId} autoEdit={editId?.id === a.id ? editId.n : 0}
+            openAsk={askId?.id === a.id ? askId.n : 0} onFocus={onFocus}
             onChange={p => patch(a, p)} onDelete={del} onAI={ai} onCancel={cancel} />
         ))}
       </div>
