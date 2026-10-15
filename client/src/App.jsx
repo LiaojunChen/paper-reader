@@ -5,6 +5,7 @@ import NoteEditor, { openNoteWindow } from './NoteEditor.jsx';
 import Settings from './Settings.jsx';
 import { ItemDetail } from './Library.jsx';
 import FolderTree from './FolderTree.jsx';
+import Splitter, { usePaneWidth } from './Splitter.jsx';
 
 export default function App() {
   const [tree, setTree] = useState({ folders: [], notes: [], items: [], vault: '' });
@@ -21,6 +22,10 @@ export default function App() {
   const [toast, setToast] = useState('');
   const [drag, setDrag] = useState(false);
   const [sort, setSort] = useState(() => localStorage.getItem('sort') || 'created');
+  // Draggable column widths (px), remembered across sessions
+  // reserve: room kept for the item list plus the other column
+  const leftPane = usePaneWidth('libLeft', 250, { min: 170, max: 560, reserve: 700 });
+  const rightPane = usePaneWidth('libRight', 420, { min: 280, max: 900, reserve: 520 });
 
   const notify = useCallback(t => { setToast(t); setTimeout(() => setToast(''), 3500); }, []);
   const loadTree = useCallback(() => api.get('/api/tree').then(setTree), []);
@@ -150,13 +155,14 @@ export default function App() {
       </div>
 
       <div className="workspace" style={{ display: activeTab === 'library' ? 'flex' : 'none' }}>
-        <aside className="col-left">
+        <aside className="col-left" style={{ width: leftPane.width }}>
           <FolderTree tree={tree} view={view} selected={treeSel} notify={notify} reload={reloadAll}
             setView={v => { setView(v); setSelected(null); }}
             onSelectFolder={path => { setView({ type: 'folder', path }); setSelected(null); }}
             onSelectItem={id => setSelected({ kind: 'item', id })} onOpenItem={openItem}
             onSelectNote={id => setSelected({ kind: 'note', id })} onOpenNote={openNoteWindow} />
         </aside>
+        <Splitter pane={leftPane} side="left" />
         <section className="col-mid">
           <div className="mid-toolbar">
             <b className="view-name">{viewName}</b>
@@ -207,7 +213,8 @@ export default function App() {
             )}
           </div>
         </section>
-        <aside className="col-right">
+        <Splitter pane={rightPane} side="right" />
+        <aside className="col-right" style={{ width: rightPane.width }}>
           {selItem ? <ItemDetail key={selItem.id} item={selItem} tree={tree} onOpen={() => openItem(selItem.id)} reload={reloadAll} notify={notify}
             onOpenNote={id => setSelected({ kind: 'note', id, parent: selItem.id })} />
             : selected?.kind === 'note' ? <NoteEditor key={selected.id} id={selected.id} onDeleted={() => { setSelected(selected.parent ? { kind: 'item', id: selected.parent } : null); reloadAll(); }}

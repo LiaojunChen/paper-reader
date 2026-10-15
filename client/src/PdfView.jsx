@@ -58,6 +58,26 @@ const PdfView = forwardRef(function PdfView(props, ref) {
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [props.url]);
 
+  // Re-apply relative zoom (page-width / page-fit / auto) when the container is resized,
+  // e.g. while dragging a column splitter; fixed percentages are left alone
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    let raf = 0, lastW = el.clientWidth;
+    const ro = new ResizeObserver(() => {
+      if (Math.abs(el.clientWidth - lastW) < 2) return;
+      lastW = el.clientWidth;
+      cancelAnimationFrame(raf);
+      raf = requestAnimationFrame(() => {
+        const v = st.current.viewer;
+        const mode = v?.currentScaleValue;
+        if (v && typeof mode === 'string' && /^(page-width|page-fit|auto)$/.test(mode)) v.currentScaleValue = mode;
+      });
+    });
+    ro.observe(el);
+    return () => { ro.disconnect(); cancelAnimationFrame(raf); };
+  }, []);
+
   // ---------- highlights ----------
   function pageDiv(n) { return viewerRef.current?.querySelector(`.page[data-page-number="${n}"]`); }
   function drawPage(n) {

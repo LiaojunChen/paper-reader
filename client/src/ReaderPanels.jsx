@@ -108,9 +108,9 @@ export function InfoPanel({ item, onChange }) {
   );
 }
 
-export function OutlinePanel({ outline, pdf, numPages, onClose, isWeb }) {
+export function OutlinePanel({ outline, pdf, numPages, onClose, isWeb, width }) {
   return (
-    <aside className="outline-panel">
+    <aside className="outline-panel" style={width ? { width } : undefined}>
       <div className="panel-head"><b>目录</b><span className="spacer" /><button className="icon" onClick={onClose}>✕</button></div>
       <div className="outline-body">
         {isWeb ? (

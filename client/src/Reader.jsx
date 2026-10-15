@@ -7,6 +7,7 @@ import { api, stream, subscribe, COLORS, fmtAuthors } from './api.js';
 import Markdown from './Markdown.jsx';
 import NoteEditor, { openNoteWindow, noteChannel, noteUrl } from './NoteEditor.jsx';
 import { ChatPanel, InfoPanel, OutlinePanel } from './ReaderPanels.jsx';
+import Splitter, { usePaneWidth } from './Splitter.jsx';
 
 export default function Reader({ itemId, settings, onOpenItem, onItemChanged, visible }) {
   const pdf = useRef(null);
@@ -31,7 +32,9 @@ export default function Reader({ itemId, settings, onOpenItem, onItemChanged, vi
   const [notes, setNotes] = useState([]);
   const [noteId, setNoteId] = useState(null);
   const [leftOpen, setLeftOpen] = useState(false);
-  const [panelW, setPanelW] = useState(() => +localStorage.getItem('panelW') || 380);
+  // Same keys in every reader tab, so resizing one tab updates the others (see usePaneWidth)
+  const sidePane = usePaneWidth('readerSide', +localStorage.getItem('panelW') || 400, { min: 280, max: 1000, reserve: 460 });
+  const outlinePane = usePaneWidth('readerOutline', 260, { min: 170, max: 520, reserve: 760 });
   const hoverHide = useRef(null);
   const noteEd = useRef(null);
   const pageSaver = useRef(null);
@@ -182,15 +185,6 @@ export default function Reader({ itemId, settings, onOpenItem, onItemChanged, vi
     return () => window.removeEventListener('keydown', h);
   });
 
-  // ---- resize side panel ----
-  function startResize(e) {
-    e.preventDefault();
-    const x0 = e.clientX, w0 = panelW;
-    const mv = ev => setPanelW(Math.min(760, Math.max(280, w0 - (ev.clientX - x0))));
-    const up = () => { window.removeEventListener('mousemove', mv); window.removeEventListener('mouseup', up); setPanelW(w => { localStorage.setItem('panelW', w); return w; }); };
-    window.addEventListener('mousemove', mv); window.addEventListener('mouseup', up);
-  }
-
   if (!item) return <div className="reader"><div className="pad muted">加载中…</div></div>;
   const wrapRect = wrapRef.current?.getBoundingClientRect();
   const pos = (r, w = 420, below = true) => {
@@ -202,7 +196,10 @@ export default function Reader({ itemId, settings, onOpenItem, onItemChanged, vi
 
   return (
     <div className="reader" style={{ display: visible ? 'flex' : 'none' }}>
-      {leftOpen && <OutlinePanel outline={outline} pdf={pdf} numPages={numPages} isWeb={isWeb} onClose={() => setLeftOpen(false)} />}
+      {leftOpen && <>
+        <OutlinePanel outline={outline} pdf={pdf} numPages={numPages} isWeb={isWeb} width={outlinePane.width} onClose={() => setLeftOpen(false)} />
+        <Splitter pane={outlinePane} side="left" />
+      </>}
       <div className="reader-main">
         <div className="reader-toolbar">
           <button className="btn ghost" title="目录" onClick={() => setLeftOpen(!leftOpen)}>☰</button>
@@ -318,8 +315,8 @@ export default function Reader({ itemId, settings, onOpenItem, onItemChanged, vi
         </div>
       </div>
 
-      <div className="resizer" onMouseDown={startResize} />
-      <aside className="reader-side" style={{ width: panelW }}>
+      <Splitter pane={sidePane} side="right" />
+      <aside className="reader-side" style={{ width: sidePane.width }}>
         <div className="tabs">
           {[['annotations', `批注 ${anns.length || ''}`], ...(isWeb ? [] : [['cite', '引用']]), ['notes', `笔记 ${notes.length || ''}`], ['chat', 'AI 对话'], ['info', '信息']].map(([k, l]) => (
             <button key={k} className={tab === k ? 'on' : ''} onClick={() => setTab(k)}>{l}</button>
