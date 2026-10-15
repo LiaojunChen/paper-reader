@@ -33,7 +33,12 @@ function initUpdater() {
   autoUpdater.on('update-not-available', () => set({ status: 'latest', available: null, checkedAt: Date.now() }));
   autoUpdater.on('update-available', info => set({ status: 'downloading', available: info.version, progress: 0, checkedAt: Date.now() }));
   autoUpdater.on('download-progress', p => set({ status: 'downloading', progress: Math.round(p.percent || 0) }));
-  autoUpdater.on('error', e => set({ status: 'error', error: friendly(e), checkedAt: Date.now() }));
+  autoUpdater.on('error', e => {
+    set({ status: 'error', error: friendly(e), checkedAt: Date.now() });
+    scheduleRetry(e);
+  });
+  autoUpdater.on('update-not-available', () => { retries = 0; });
+  autoUpdater.on('update-downloaded', () => { retries = 0; });
   autoUpdater.on('update-downloaded', info => {
     set({ status: 'downloaded', available: info.version, progress: 100 });
     promptRestart(info.version);
@@ -60,6 +65,17 @@ async function checkForUpdates({ manual = false } = {}) {
     else if (state.status === 'downloading') dialog.showMessageBox(focusedWin(), { type: 'info', message: `发现新版本 ${state.available}`, detail: '正在后台下载，完成后会提示你重启。' });
   }
   return state;
+}
+
+// Proxies and GitHub drop connections now and then; a network error retries quickly
+// (1, 3, 10, 30 min) instead of waiting for the next 4-hour check
+let retries = 0, retryTimer = null;
+const RETRY_MIN = [1, 3, 10, 30];
+function scheduleRetry(e) {
+  if (!/ENOTFOUND|ECONNRESET|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN|net::|socket hang up/i.test(String(e?.message || e))) return;
+  if (retries >= RETRY_MIN.length || retryTimer) return;
+  const ms = RETRY_MIN[retries++] * 60 * 1000;
+  retryTimer = setTimeout(() => { retryTimer = null; checkForUpdates(); }, ms);
 }
 
 let prompted = '';
