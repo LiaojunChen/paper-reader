@@ -39,9 +39,15 @@ const version = pkg.version;
 const notesIdx = args.indexOf('--notes');
 const notes = notesIdx >= 0 ? args[notesIdx + 1] || '' : `Paper Reader ${version}`;
 
-// ---- build ----
-fs.rmSync(path.join(ROOT, 'release'), { recursive: true, force: true });
-run('npm', ['run', 'dist']);
+// ---- build (skipped when resuming an interrupted upload of the same version) ----
+const relDir = path.join(ROOT, 'release');
+const built = fs.existsSync(path.join(relDir, `PaperReader-Setup-${version}.exe`)) && fs.existsSync(path.join(relDir, 'latest.yml'))
+  && fs.readFileSync(path.join(relDir, 'latest.yml'), 'utf8').includes(`version: ${version}`);
+if (built && !args.includes('--rebuild')) console.log(`release/ 里已有 ${version} 的安装包，直接上传（加 --rebuild 强制重新打包）`);
+else {
+  fs.rmSync(relDir, { recursive: true, force: true });
+  run('npm', ['run', 'dist']);
+}
 
 // ---- assets: the installer + its blockmap + latest.yml are what auto-update needs ----
 const rel = path.join(ROOT, 'release');
@@ -52,9 +58,31 @@ if (missing.length) console.warn('缺少文件：', missing.join(', '));
 if (!assets.some(f => f.endsWith('latest.yml'))) throw new Error('没有生成 latest.yml，自动更新会找不到这个版本');
 
 // ---- publish ----
+// Uploads of ~125 MB files over a flaky connection can time out (HTTP 408), so: create the release
+// as a draft, upload files one by one with retries, and only publish once every asset is present.
+// Installed apps never see a draft, so a half-finished release can't break anyone's update.
 const tag = `v${version}`;
-const exists = (() => { try { run('gh', ['release', 'view', tag], { stdio: 'ignore' }); return true; } catch { return false; } })();
-if (exists) run('gh', ['release', 'upload', tag, ...assets, '--clobber']);
-else run('gh', ['release', 'create', tag, ...assets, '--title', `Paper Reader ${version}`, '--notes', notes, '--target', 'main']);
+const gh = (argv, opts) => run('gh', argv, opts);
+const view = () => { try { return JSON.parse(execFileSync('gh', ['release', 'view', tag, '--json', 'isDraft,assets'], { cwd: ROOT, encoding: 'utf8' })); } catch { return null; } };
+if (!view()) gh(['release', 'create', tag, '--draft', '--title', `Paper Reader ${version}`, '--notes', notes, '--target', 'main']);
+
+const sleep = ms => new Promise(r => setTimeout(r, ms));
+// Upload big files first and latest.yml last: the update feed only points at the new version
+// once the installer it references is already there
+const order = [...assets].sort((a, b) => (a.endsWith('latest.yml') ? 1 : 0) - (b.endsWith('latest.yml') ? 1 : 0));
+for (const file of order) {
+  const name = path.basename(file), size = fs.statSync(file).size;
+  for (let attempt = 1; ; attempt++) {
+    const have = view()?.assets?.find(a => a.name === name);
+    if (have && have.size === size) { console.log(`✓ ${name}`); break; }
+    try { gh(['release', 'upload', tag, file, '--clobber']); }
+    catch (e) {
+      if (attempt >= 5) throw new Error(`上传 ${name} 失败 5 次，草稿已保留，网络好了以后重跑 npm run release 即可续传`);
+      console.warn(`上传 ${name} 失败（第 ${attempt} 次），${attempt * 15} 秒后重试…`);
+      await sleep(attempt * 15000);
+    }
+  }
+}
+if (view()?.isDraft) gh(['release', 'edit', tag, '--draft=false', '--latest']);
 
 console.log(`\n✓ 已发布 ${tag}。已安装的 Paper Reader 会在下次启动（或 4 小时内）检测到这个版本。`);

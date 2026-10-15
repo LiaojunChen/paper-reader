@@ -13,13 +13,23 @@ npm run build && npm start
 
 Windows 下也可以双击 `start.cmd`。需要 Node.js ≥ 22.5（用到内置 `node:sqlite`）。
 
-## 安装包
+## 安装与更新
 
-`npm run dist` 生成 `release/`：
-- `PaperReader-0.1.0-x64.exe`：安装包（可选安装位置、建桌面快捷方式）
-- `PaperReader-0.1.0-portable.exe`：免安装单文件
+从 [Releases](https://github.com/LiaojunChen/paper-reader/releases) 下载：
+- `PaperReader-Setup-<版本>.exe`：安装版（可选安装位置、建桌面快捷方式），**会自动更新**
+- `PaperReader-<版本>-portable.exe`：免安装单文件，不自动更新，需要手动换新版本
 
-文库数据存在 `%APPDATA%\Paper Reader\library`（菜单「文件 → 打开数据文件夹」可直达），卸载不会删除。
+安装版启动后约 8 秒检查一次更新，之后每 4 小时检查一次；网络出错会在 1/3/10/30 分钟后重试。发现新版本会在后台下载（顶栏显示进度），下载完弹窗问是否重启；选「稍后」就在下次退出时自动安装。也可以在菜单「帮助 → 检查更新」或设置的「更新」一栏手动检查。
+
+文库数据存在 `%APPDATA%\Paper Reader\library`（菜单「文件 → 打开数据文件夹」可直达），更新、覆盖安装、卸载都不会动它。
+
+### 发布新版本（维护者）
+
+```bash
+npm run release -- patch --notes "这次改了什么"   # 0.2.1 → 0.2.2，也可以用 minor / major / 具体版本号
+```
+
+脚本会打包，先建成草稿，逐个上传文件（失败自动重试），全部传完才转为正式发布，所以已安装的应用不会拿到半成品。上传中断时重跑同一条命令（不带 patch），会跳过打包继续上传。上传用的是本机 `gh` 的登录，不需要额外配置 token。
 
 ## 存储方式
 
