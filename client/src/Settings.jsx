@@ -1,6 +1,7 @@
 import { useState } from 'react';
 import { api, COLORS, COLOR_LABEL_DEFAULT } from './api.js';
 import { setPresetCache } from './AgentComposer.jsx';
+import { UpdateSection } from './UpdateBadge.jsx';
 
 const PRESETS = {
   openai: { llmProvider: 'openai', llmBaseUrl: 'https://api.openai.com/v1', llmModel: 'gpt-4o-mini' },
@@ -79,6 +80,8 @@ export default function Settings({ settings, onClose, onSaved }) {
           ))}
           <div><button className="link" onClick={() => set('agentPresets', [...(s.agentPresets || []), { label: '新指令', text: '' }])}>＋ 添加快捷指令</button></div>
         </div>
+
+        <UpdateSection />
 
         <div className="set-sec">界面</div>
         <label className="info-field"><span>界面缩放 {Math.round((s.uiScale || 1) * 100)}%</span>

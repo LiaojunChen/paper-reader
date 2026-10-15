@@ -6,6 +6,7 @@ import Settings from './Settings.jsx';
 import { ItemDetail } from './Library.jsx';
 import FolderTree from './FolderTree.jsx';
 import Splitter, { usePaneWidth } from './Splitter.jsx';
+import UpdateBadge from './UpdateBadge.jsx';
 
 export default function App() {
   const [tree, setTree] = useState({ folders: [], notes: [], items: [], vault: '' });
@@ -151,6 +152,7 @@ export default function App() {
             </div>
           ))}
         </div>
+        <UpdateBadge />
         <button className="btn ghost" title="设置" onClick={() => setShowSettings(true)}>⚙</button>
       </div>
 

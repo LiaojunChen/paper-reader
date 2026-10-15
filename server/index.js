@@ -576,6 +576,17 @@ if (isProd) {
 
 configureSources(getSettings());
 
+// ---------- Auto-update (desktop build only; the Electron shell installs a controller) ----------
+let updateCtl = null;
+export function setUpdateController(ctl) {
+  updateCtl = ctl;
+  ctl.subscribe?.(s => broadcast({ type: 'update', state: s }));
+}
+const noUpdater = { status: 'unsupported', version: '', reason: '浏览器模式（npm run dev）不支持自动更新，请用 git pull 更新' };
+app.get('/api/update', (req, res) => res.json(updateCtl ? updateCtl.state() : noUpdater));
+app.post('/api/update/check', wrap(async (req, res) => { if (!updateCtl) return res.json(noUpdater); await updateCtl.check(); res.json(updateCtl.state()); }));
+app.post('/api/update/install', (req, res) => res.json(updateCtl ? updateCtl.install() : { ok: false, reason: noUpdater.reason }));
+
 // ---------- Vault ----------
 vault.openVault(getSettings().vaultDir);
 // Changes made outside the app (Obsidian, Explorer, sync tools): refresh the tree and push new

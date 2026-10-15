@@ -2,6 +2,7 @@
 const { app, BrowserWindow, shell, dialog, Menu } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const updater = require('./updater.cjs');
 
 // Library lives in the user's app data, not inside the installed program folder
 const DATA_DIR = path.join(app.getPath('userData'), 'library');
@@ -37,8 +38,15 @@ function createWindow(url, opts = {}) {
 }
 
 async function startServer() {
-  const { startServer: start } = await import(`file://${path.join(__dirname, '..', 'server', 'index.js').replace(/\\/g, '/')}`);
-  return start();
+  const mod = await import(`file://${path.join(__dirname, '..', 'server', 'index.js').replace(/\\/g, '/')}`);
+  // The UI talks to the updater through the local server (/api/update), so no preload/IPC is needed
+  mod.setUpdateController?.({
+    state: updater.getUpdateState,
+    check: () => updater.checkForUpdates({ manual: true }),
+    install: updater.installNow,
+    subscribe: updater.onUpdateState,
+  });
+  return mod.startServer();
 }
 
 app.whenReady().then(async () => {
@@ -47,6 +55,7 @@ app.whenReady().then(async () => {
     const { url } = await startServer();
     serverUrl = url;
     createWindow(url);
+    updater.initUpdater();
   } catch (e) {
     dialog.showErrorBox('启动失败', String(e?.stack || e));
     app.quit();
@@ -90,6 +99,15 @@ function buildMenu() {
         { role: 'toggleDevTools', label: '开发者工具' },
         { type: 'separator' },
         { role: 'togglefullscreen', label: '全屏' },
+      ],
+    },
+    {
+      label: '帮助',
+      submenu: [
+        { label: '检查更新…', click: () => updater.checkForUpdates({ manual: true }) },
+        { label: '版本发布页', click: () => shell.openExternal('https://github.com/LiaojunChen/paper-reader/releases') },
+        { type: 'separator' },
+        { label: `关于 Paper Reader ${app.getVersion()}`, click: () => dialog.showMessageBox({ type: 'info', title: '关于', message: `Paper Reader ${app.getVersion()}`, detail: `Electron ${process.versions.electron} · Node ${process.versions.node}\n数据目录：${DATA_DIR}` }) },
       ],
     },
   ]);
