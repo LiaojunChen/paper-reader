@@ -22,6 +22,10 @@ const NoteEditor = forwardRef(function NoteEditor({ id: initialId, onTitle, onDe
   const [content, setContent] = useState('');
   const [mode, setMode] = useState(() => localStorage.getItem('noteMode') || 'live');
   const [saved, setSaved] = useState(true);
+  const dirty = useRef(false);
+  const pendingSync = useRef(false);
+  const noteRef = useRef(null);
+  noteRef.current = note;
   const ta = useRef(null);
   const insertFn = useRef(null);   // LiveMarkdown's insert hook
   const timer = useRef(null);
@@ -32,6 +36,12 @@ const NoteEditor = forwardRef(function NoteEditor({ id: initialId, onTitle, onDe
     let live = true;
     api.get(noteUrl(id)).then(n => { if (live) { setNote(n); setContent(n.content); } }).catch(() => live && onDeleted?.());
     const off = subscribe(m => {
+      if (m.origin === 'sync' && ((m.type === 'note' && m.note.id === idRef.current) || (m.type === 'note-deleted' && m.id === idRef.current)) && dirty.current) {
+        // Keep the pending draft in the editor. The next save supplies the
+        // revision it was based on; the server preserves a conflicting file.
+        pendingSync.current = true;
+        return;
+      }
       if (m.type === 'note' && m.renamedFrom === idRef.current && m.origin !== CLIENT_ID) { setId(m.note.id); return; }
       if (m.type === 'note' && m.note.id === idRef.current && m.origin !== CLIENT_ID && m.note.content !== latest.current) {
         setNote(n => ({ ...n, ...m.note })); setContent(m.note.content);
@@ -50,12 +60,24 @@ const NoteEditor = forwardRef(function NoteEditor({ id: initialId, onTitle, onDe
     if (!timer.current) return;
     clearTimeout(timer.current); timer.current = null;
     const cur = idRef.current;
-    api.put(noteUrl(cur), { content: latest.current, autoTitle: true }).then(n => {
-      setSaved(true);
+    api.put(noteUrl(cur), { content: latest.current, autoTitle: true, baseMtime: noteRef.current?.mtime }).then(n => {
+      setNote(n);
+      if (latest.current === n.content) {
+        setSaved(true); dirty.current = false;
+        if (pendingSync.current) {
+          pendingSync.current = false;
+          // A sync event can reach this window before the preceding save's HTTP
+          // response. Re-read once to display whichever revision is now on disk.
+          api.get(noteUrl(n.id)).then(current => {
+            if (!dirty.current && idRef.current === current.id) { setNote(current); setContent(current.content); }
+          }).catch(() => { if (!dirty.current) onDeleted?.(); });
+        }
+      }
       if (n.id !== cur) { setId(n.id); onRenamed?.(n.id, cur); }
     }).catch(() => setSaved(false));
   }
   function change(v) {
+    dirty.current = true;
     setContent(v); setSaved(false);
     clearTimeout(timer.current);
     timer.current = setTimeout(() => { timer.current = 1; flush(); }, 600);

@@ -1,6 +1,6 @@
 # Paper Reader
 
-本地论文管理 + 阅读器，面向 AI 论文阅读。数据全部存在 `data/`（SQLite + PDF），只监听 127.0.0.1。
+本地论文管理 + 阅读器，面向 AI 论文阅读。数据保存在 `data/`（SQLite + PDF），只监听 127.0.0.1；可选用 Google Drive 跨设备同步。
 
 ## 启动
 
@@ -16,12 +16,17 @@ Windows 下也可以双击 `start.cmd`。需要 Node.js ≥ 22.5（用到内置 
 ## 安装与更新
 
 从 [Releases](https://github.com/LiaojunChen/paper-reader/releases) 下载：
-- `PaperReader-Setup-<版本>.exe`：安装版（可选安装位置、建桌面快捷方式），**会自动更新**
-- `PaperReader-<版本>-portable.exe`：免安装单文件，不自动更新，需要手动换新版本
+- `PaperReader-Setup-<版本>.exe`：Windows 安装版（可选安装位置、建桌面快捷方式），**会自动更新**
+- `PaperReader-<版本>-portable.exe`：Windows 免安装单文件，不自动更新，需要手动换新版本
+- `PaperReader-<版本>-arm64.dmg`：macOS 版（Apple Silicon，M 系列芯片），不自动更新，需要手动换新版本
 
-安装版启动后约 8 秒检查一次更新，之后每 4 小时检查一次；网络出错会在 1/3/10/30 分钟后重试。发现新版本会在后台下载（顶栏显示进度），下载完弹窗问是否重启；选「稍后」就在下次退出时自动安装。也可以在菜单「帮助 → 检查更新」或设置的「更新」一栏手动检查。
+安装版启动后约 8 秒检查一次更新，之后每 4 小时检查一次；网络出错会在 1/3/10/30 分钟后重试。发现新版本会在后台下载（顶栏显示进度），下载完弹窗问是否重启；选「稍后」就在下次退出时自动安装。也可以在菜单「帮助 → 检查更新」或设置的「更新」一栏手动检查。（仅 Windows 安装版支持；macOS 和免安装版需要自己到发布页下载新版本）
 
-文库数据存在 `%APPDATA%\Paper Reader\library`（菜单「文件 → 打开数据文件夹」可直达），更新、覆盖安装、卸载都不会动它。
+文库数据存在 `%APPDATA%\Paper Reader\library`（Windows）或 `~/Library/Application Support/Paper Reader/library`（macOS），菜单「文件 → 打开数据文件夹」可直达，更新、覆盖安装、卸载都不会动它。
+
+### macOS 安装说明
+
+因为没有 Apple 开发者证书签名，首次打开会被 Gatekeeper 拦截（提示「无法打开，因为无法验证开发者」）。打开方法：在 Finder 里右键（或按住 Control 点击）`Paper Reader.app` → 「打开」，弹窗里再点一次「打开」即可，以后双击正常启动。
 
 ### 发布新版本（维护者）
 
@@ -73,6 +78,8 @@ library/
 批注编辑框：`Ctrl+Enter` 保存，`Ctrl+Shift+Enter` 保存并派给 AI
 
 ## 设置
+
+**Google Drive 同步**：设置 → 跨端同步 · Google Drive。配置 Google 桌面应用 OAuth 客户端后，在各台设备连接同一账号，即可同步 PDF、文献、批注、笔记、附件和阅读页码，支持离线合并与冲突副本；API Key 和本机路径留在本地。完整的首次配置、同步规则及恢复说明见 [Google Drive 跨端同步](docs/google-drive-sync.md)。
 
 右上角 ⚙：
 - LLM：Base URL / API Key / 模型，内置 OpenAI、DeepSeek、通义、Kimi、Anthropic、Ollama 预设

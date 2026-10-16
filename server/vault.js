@@ -21,6 +21,7 @@ let selfWriteUntil = 0;
 
 export function setVaultChangeHandler(fn) { onChange = fn; }
 export const getVaultDir = () => vaultDir;
+export function invalidateVault() { cache = null; selfWriteUntil = Date.now() + 800; }
 
 export function openVault(dir) {
   vaultDir = path.resolve(dir);

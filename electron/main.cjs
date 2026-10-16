@@ -1,5 +1,5 @@
 // Electron shell: runs the Express server in-process and shows it in a window.
-const { app, BrowserWindow, shell, dialog, Menu } = require('electron');
+const { app, BrowserWindow, shell, dialog, Menu, safeStorage } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
 const updater = require('./updater.cjs');
@@ -39,6 +39,13 @@ function createWindow(url, opts = {}) {
 
 async function startServer() {
   const mod = await import(`file://${path.join(__dirname, '..', 'server', 'index.js').replace(/\\/g, '/')}`);
+  mod.setSyncCredentialCodec?.({
+    encrypt(value) {
+      if (!safeStorage.isEncryptionAvailable()) throw new Error('系统凭据加密不可用，无法保存 Google 登录信息');
+      return safeStorage.encryptString(value).toString('base64');
+    },
+    decrypt(value) { return safeStorage.decryptString(Buffer.from(value, 'base64')); },
+  });
   // The UI talks to the updater through the local server (/api/update), so no preload/IPC is needed
   mod.setUpdateController?.({
     state: updater.getUpdateState,
@@ -63,7 +70,8 @@ app.whenReady().then(async () => {
   app.on('activate', () => { if (!BrowserWindow.getAllWindows().length) createWindow(serverUrl); });
 });
 
-app.on('window-all-closed', () => app.quit());
+// macOS convention: closing the last window leaves the app (and its dock icon) running
+app.on('window-all-closed', () => { if (process.platform !== 'darwin') app.quit(); });
 
 // Single instance: focus the existing window instead of starting a second server
 if (!app.requestSingleInstanceLock()) app.quit();
@@ -75,6 +83,18 @@ else app.on('second-instance', () => {
 function buildMenu() {
   const isMac = process.platform === 'darwin';
   return Menu.buildFromTemplate([
+    ...(isMac ? [{
+      label: app.name,
+      submenu: [
+        { role: 'about', label: `关于 Paper Reader` },
+        { type: 'separator' },
+        { role: 'hide', label: '隐藏' },
+        { role: 'hideOthers', label: '隐藏其他' },
+        { role: 'unhide', label: '全部显示' },
+        { type: 'separator' },
+        { role: 'quit', label: '退出' },
+      ],
+    }] : []),
     {
       label: '文件',
       submenu: [

@@ -10,9 +10,18 @@ import { fetchArticle } from './webclip.js';
 import { runTask, cancelTask, setBroadcaster, isRunning } from './agent.js';
 import { chat } from './llm.js';
 import * as vault from './vault.js';
+import { createSync } from './sync.js';
 
 const app = express();
 app.use(express.json({ limit: '20mb' }));
+let syncCtl;
+// Capture all API mutations, including reading-position updates without an SSE.
+app.use('/api', (req, res, next) => {
+  if (!['GET', 'HEAD', 'OPTIONS'].includes(req.method) && !req.path.startsWith('/sync')) {
+    res.on('finish', () => { if (res.statusCode < 400) syncCtl?.schedule(); });
+  }
+  next();
+});
 const upload = multer({ dest: path.join(FILES_DIR, '_tmp'), limits: { fileSize: 300 * 1024 * 1024 } });
 // In the packaged app the client build sits outside the asar archive
 const ROOT = process.env.PAPER_ROOT ? path.resolve(process.env.PAPER_ROOT) : path.resolve(import.meta.dirname, '..');
@@ -22,6 +31,7 @@ const clients = new Set();
 function broadcast(msg) {
   const data = `data: ${JSON.stringify(msg)}\n\n`;
   for (const res of clients) res.write(data);
+  if (['item', 'items', 'tree', 'annotation', 'annotation-deleted', 'note', 'note-deleted'].includes(msg.type)) syncCtl?.schedule();
 }
 setBroadcaster(broadcast);
 app.get('/api/events', (req, res) => {
@@ -483,6 +493,14 @@ app.post('/api/notes', wrap(async (req, res) => {
 app.put('/api/note', wrap(async (req, res) => {
   let id = String(req.query.id || '');
   const { content, title } = req.body;
+  if (typeof content === 'string' && Number.isFinite(req.body.baseMtime)) {
+    let previous;
+    try { previous = vault.readNote(id); } catch { /* a remote deletion can be followed by an explicit local draft save */ }
+    if (previous && previous.mtime !== req.body.baseMtime && previous.content !== content) {
+      const copy = vault.createNote(previous.dir, `${previous.title} (冲突 ${Date.now()})`, previous.content);
+      broadcast({ type: 'note', note: noteOut(vault.readNote(copy)) }); broadcast({ type: 'tree' });
+    }
+  }
   if (typeof content === 'string') vault.writeNote(id, content);
   const want = title ?? (req.body.autoTitle ? deriveTitle(content) : null);
   let renamed = false;
@@ -600,6 +618,22 @@ vault.setVaultChangeHandler(({ external, files }) => {
   }
 });
 migrateToVault();
+syncCtl = createSync(broadcast, noteOut);
+export function setSyncCredentialCodec(codec) { syncCtl.setCredentialCodec(codec); }
+// Browsers may read status, but only the local application's own origin can
+// initiate authorization or write credentials (including on a random app port).
+app.use('/api/sync', (req, res, next) => {
+  if (['GET', 'HEAD'].includes(req.method)) return next();
+  const origin = req.get('origin');
+  if (!['127.0.0.1', 'localhost'].includes(req.hostname) || (origin && origin !== `http://${req.get('host')}`) || req.get('sec-fetch-site') === 'cross-site' || !req.is('application/json')) return res.status(403).json({ error: '请从 Paper Reader 设置中操作同步' });
+  res.set('Cache-Control', 'no-store');
+  next();
+});
+app.get('/api/sync', (req, res) => { res.set('Cache-Control', 'no-store'); res.json(syncCtl.state()); });
+app.put('/api/sync/config', wrap(async (req, res) => res.json(syncCtl.configure(req.body))));
+app.post('/api/sync/connect', wrap(async (_req, res) => res.json(await syncCtl.connect())));
+app.post('/api/sync/disconnect', wrap(async (_req, res) => res.json(syncCtl.disconnect())));
+app.post('/api/sync/run', wrap(async (_req, res) => { const result = await syncCtl.run(); res.json({ ...syncCtl.state(), result }); }));
 
 // One-time move of the old DB-based categories and notes into real folders / .md files.
 // The old tables are kept (renamed) as a backup rather than dropped.

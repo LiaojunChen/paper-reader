@@ -47,6 +47,11 @@ export default function Reader({ itemId, settings, onOpenItem, onItemChanged, vi
     api.get(`/api/notes?item=${itemId}`).then(setNotes);
   }, [itemId]);
   useEffect(() => subscribe(m => {
+    if (m.type === 'sync-applied') {
+      api.get(`/api/items/${itemId}`).then(setItem).catch(() => {});
+      api.get(`/api/items/${itemId}/annotations`).then(setAnns);
+      api.get(`/api/notes?item=${itemId}`).then(setNotes);
+    }
     if (m.type === 'annotation' && m.annotation.item_id === itemId && !deletedIds.current.has(m.annotation.id)) setAnns(list => upsert(list, m.annotation));
     if (m.type === 'annotation-deleted' && m.item_id === itemId) setAnns(list => list.filter(a => a.id !== m.id));
     if (m.type === 'item' && m.id === itemId) api.get(`/api/items/${itemId}`).then(setItem);

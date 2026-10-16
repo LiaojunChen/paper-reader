@@ -383,3 +383,12 @@ body.is-resizing iframe, body.is-resizing .pdf-container { pointer-events: none;
 .md hr { border: none; border-top: 1px solid var(--line); margin: 0.9em 0; }
 .md img { max-width: 100%; }
 .md .katex-display { overflow-x: auto; overflow-y: hidden; }
+:root { --sync-error: #c0392b; }
+.sync-status { display: flex; flex-direction: column; gap: 5px; margin: 12px 0; }
+.sync-config { margin: 12px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; }
+.sync-config summary { cursor: pointer; }
+.sync-actions { margin-top: 12px; gap: 8px; }
+.sync-auto { display: inline-flex; align-items: center; gap: 6px; font-size: 13px; }
+.sync-auto input { width: auto; }
+.sync-error { color: var(--sync-error); overflow-wrap: anywhere; }
+.sync-badge { white-space: nowrap; }

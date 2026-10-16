@@ -2,6 +2,7 @@ import { useState } from 'react';
 import { api, COLORS, COLOR_LABEL_DEFAULT } from './api.js';
 import { setPresetCache } from './AgentComposer.jsx';
 import { UpdateSection } from './UpdateBadge.jsx';
+import DriveSyncSection from './DriveSync.jsx';
 
 const PRESETS = {
   openai: { llmProvider: 'openai', llmBaseUrl: 'https://api.openai.com/v1', llmModel: 'gpt-4o-mini' },
@@ -56,6 +57,8 @@ export default function Settings({ settings, onClose, onSaved }) {
         <div className="set-sec">笔记库（Obsidian 兼容）</div>
         <div className="muted small">左侧的文件夹和笔记都是这个目录下真实的文件夹和 .md 文件，可以直接用 Obsidian 打开同一个目录。论文 PDF、元数据和批注仍存在数据库里。改到一个已有的 Obsidian 库也可以。</div>
         {inp('vaultDir', '笔记库路径')}
+
+        <DriveSyncSection />
 
         <div className="set-sec">文献元数据</div>
         <div className="muted small">引用信息来自 OpenAlex（含摘要）和 Crossref。OpenAlex 不填 Key 时与同一出口 IP 的所有人共享每日免费额度，额度用完后只能用 Crossref（没有摘要）。可以在 openalex.org 免费申请 Key。</div>

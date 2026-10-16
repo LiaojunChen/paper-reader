@@ -14,13 +14,18 @@ function set(patch) {
 
 // portable builds run from a temp dir and set this env var; dev runs are not packaged
 const isPortable = () => !!process.env.PORTABLE_EXECUTABLE_FILE;
+// Squirrel.Mac requires a signed app to self-update; this build isn't code-signed,
+// so macOS users check the releases page manually instead
 const updatable = () => app.isPackaged && !isPortable() && process.platform === 'win32';
 
 const focusedWin = () => BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0] || null;
 
 function initUpdater() {
   if (!updatable()) {
-    set({ status: 'unsupported', reason: isPortable() ? '免安装版不能自动更新，请到发布页下载新版本' : '开发模式不检查更新' });
+    const reason = isPortable() ? '免安装版不能自动更新，请到发布页下载新版本'
+      : process.platform === 'darwin' ? 'macOS 版暂不支持自动更新，请到发布页下载新版本'
+      : '开发模式不检查更新';
+    set({ status: 'unsupported', reason });
     return;
   }
   ({ autoUpdater } = require('electron-updater'));
