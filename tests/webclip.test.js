@@ -1,6 +1,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { unescapeMath } from '../shared/text.js';
+import { htmlToMarkdown } from '../server/webclip.js';
 import { articleLang } from '../client/src/articleLang.js';
 
 test('Turndown escapes are removed inside TeX, not in surrounding text', () => {
@@ -12,6 +13,18 @@ test('Turndown escapes are removed inside TeX, not in surrounding text', () => {
 
 test('prices and lone dollar signs are left alone', () => {
   for (const s of ['costs $5 and $10\\_000 later', 'a $ sign and file\\_name', 'from $ 3 to $ 4']) assert.equal(unescapeMath(s), s);
+});
+
+test('HTML tables become GFM pipe tables instead of loose cells', () => {
+  assert.equal(htmlToMarkdown('<table><thead><tr><th>Term</th><th>Meaning</th></tr></thead>'
+    + '<tbody><tr><td>Grounding</td><td>Locate the described <em>object</em>, e.g. a <a href="https://x.dev/a">box</a>.</td></tr>'
+    + '<tr><td>Pointing</td><td>a | b</td></tr></tbody></table>'),
+  (['| Term | Meaning |', '| --- | --- |',
+    '| Grounding | Locate the described *object*, e.g. a [box](https://x.dev/a). |',
+    '| Pointing | a \\| b |'].join('\n')));
+  // Cells collapse to one line, and ragged rows are padded so the table stays valid
+  assert.equal(htmlToMarkdown('<table><tr><td>a<br>b</td><td>c</td></tr><tr><td>d</td></tr></table>'),
+    '| a b | c |\n| --- | --- |\n| d |  |');
 });
 
 test('article language detection', () => {
