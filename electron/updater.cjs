@@ -1,6 +1,6 @@
 // Auto-update from GitHub Releases (electron-updater).
 // Checks on launch and every 4 h, downloads in the background, then asks to restart.
-// Only the NSIS installer build can update itself; the portable exe and `npm run app` just report status.
+// Only the NSIS installer build can update itself; the portable exe, macOS and `npm run app` just report status.
 const { app, dialog, BrowserWindow } = require('electron');
 
 let autoUpdater = null;
@@ -14,17 +14,23 @@ function set(patch) {
 
 // portable builds run from a temp dir and set this env var; dev runs are not packaged
 const isPortable = () => !!process.env.PORTABLE_EXECUTABLE_FILE;
-// Squirrel.Mac requires a signed app to self-update; this build isn't code-signed,
-// so macOS users check the releases page manually instead
-const updatable = () => app.isPackaged && !isPortable() && process.platform === 'win32';
+// Squirrel.Mac only accepts updates signed with the same Developer ID as the installed app;
+// the macOS build is unsigned and updated by rebuilding locally (`npm run install:mac`)
+function unsupportedReason() {
+  if (!app.isPackaged) return '开发模式不检查更新';
+  if (isPortable()) return '免安装版不能自动更新，请到发布页下载新版本';
+  if (process.platform === 'darwin') return 'macOS 版不自动更新：在项目目录运行 npm run install:mac 安装新版本';
+  if (process.platform !== 'win32') return '此系统暂不支持自动更新，请到发布页下载新版本';
+  return '';
+}
+const updatable = () => !unsupportedReason();
 
 const focusedWin = () => BrowserWindow.getFocusedWindow() || BrowserWindow.getAllWindows()[0] || null;
 
 function initUpdater() {
-  if (!updatable()) {
-    const reason = isPortable() ? '免安装版不能自动更新，请到发布页下载新版本'
-      : process.platform === 'darwin' ? 'macOS 版暂不支持自动更新，请到发布页下载新版本'
-      : '开发模式不检查更新';
+  if (autoUpdater) return;
+  const reason = unsupportedReason();
+  if (reason) {
     set({ status: 'unsupported', reason });
     return;
   }
@@ -42,8 +48,8 @@ function initUpdater() {
     set({ status: 'error', error: friendly(e), checkedAt: Date.now() });
     scheduleRetry(e);
   });
-  autoUpdater.on('update-not-available', () => { retries = 0; });
-  autoUpdater.on('update-downloaded', () => { retries = 0; });
+  autoUpdater.on('update-not-available', clearRetry);
+  autoUpdater.on('update-downloaded', clearRetry);
   autoUpdater.on('update-downloaded', info => {
     set({ status: 'downloaded', available: info.version, progress: 100 });
     promptRestart(info.version);
@@ -61,9 +67,10 @@ async function checkForUpdates({ manual = false } = {}) {
     return state;
   }
   if (state.status === 'downloading' || state.status === 'checking') return state;
-  if (state.status === 'downloaded') { if (manual) promptRestart(state.available); return state; }
+  if (state.status === 'downloaded') { if (manual) await promptRestart(state.available, true); return state; }
+  set({ status: 'checking', error: '' });
   try { await autoUpdater.checkForUpdates(); }
-  catch (e) { set({ status: 'error', error: friendly(e), checkedAt: Date.now() }); }
+  catch (e) { set({ status: 'error', error: friendly(e), checkedAt: Date.now() }); scheduleRetry(e); }
   if (manual) {
     if (state.status === 'latest') dialog.showMessageBox(focusedWin(), { type: 'info', message: '已是最新版本', detail: `当前版本 ${app.getVersion()}` });
     else if (state.status === 'error') dialog.showMessageBox(focusedWin(), { type: 'warning', message: '检查更新失败', detail: state.error });
@@ -76,6 +83,11 @@ async function checkForUpdates({ manual = false } = {}) {
 // (1, 3, 10, 30 min) instead of waiting for the next 4-hour check
 let retries = 0, retryTimer = null;
 const RETRY_MIN = [1, 3, 10, 30];
+function clearRetry() {
+  retries = 0;
+  if (retryTimer) clearTimeout(retryTimer);
+  retryTimer = null;
+}
 function scheduleRetry(e) {
   if (!/ENOTFOUND|ECONNRESET|ETIMEDOUT|ECONNREFUSED|EAI_AGAIN|net::|socket hang up/i.test(String(e?.message || e))) return;
   if (retries >= RETRY_MIN.length || retryTimer) return;
@@ -83,29 +95,37 @@ function scheduleRetry(e) {
   retryTimer = setTimeout(() => { retryTimer = null; checkForUpdates(); }, ms);
 }
 
-let prompted = '';
-async function promptRestart(version) {
-  if (prompted === version) return;   // ask once per version; the top-bar button stays available
+let prompted = '', prompting = false;
+async function promptRestart(version, manual = false) {
+  if (prompting || (!manual && prompted === version)) return;
   prompted = version;
-  const { response } = await dialog.showMessageBox(focusedWin(), {
+  prompting = true;
+  try {
+    const { response } = await dialog.showMessageBox(focusedWin(), {
     type: 'info', buttons: ['立即重启更新', '稍后'], defaultId: 0, cancelId: 1,
     message: `新版本 ${version} 已下载`,
     detail: '重启后完成更新。你的文库、笔记和设置不受影响。选「稍后」则会在下次退出时自动安装。',
-  });
-  if (response === 0) installNow();
+    });
+    if (response === 0) installNow();
+  } finally { prompting = false; }
 }
 
 function installNow() {
   if (!autoUpdater || state.status !== 'downloaded') return { ok: false, reason: '还没有下载好的更新' };
   // isSilent=false shows the installer progress; isForceRunAfter=true relaunches the app afterwards
-  setImmediate(() => autoUpdater.quitAndInstall(false, true));
+  setImmediate(() => {
+    try { autoUpdater.quitAndInstall(false, true); }
+    catch (e) { set({ status: 'error', error: friendly(e), checkedAt: Date.now() }); }
+  });
   return { ok: true };
 }
 
 function friendly(e) {
   const m = String(e?.message || e);
   if (/ENOTFOUND|ECONNRESET|ETIMEDOUT|ECONNREFUSED|net::/i.test(m)) return '连不上 GitHub（网络或代理问题），稍后会自动重试';
-  if (/404|latest\.yml/i.test(m)) return '发布页上还没有可用的安装包';
+  if (/404|latest(?:-mac)?\.yml/i.test(m)) return '发布页上还没有可用的安装包或更新信息';
+  if (/read.only|Cannot update while running on a read-only volume/i.test(m)) return '请先将 Paper Reader 拖入「应用程序」文件夹，再重新打开并检查更新';
+  if (/signature|code.?sign/i.test(m)) return '更新包签名验证失败，请到发布页下载同一开发者签名的版本';
   return m.split('\n')[0].slice(0, 200);
 }
 

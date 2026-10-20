@@ -2,6 +2,7 @@
 const { app, BrowserWindow, shell, dialog, Menu, safeStorage } = require('electron');
 const path = require('node:path');
 const fs = require('node:fs');
+const { pathToFileURL } = require('node:url');
 const updater = require('./updater.cjs');
 
 // Library lives in the user's app data, not inside the installed program folder
@@ -38,7 +39,7 @@ function createWindow(url, opts = {}) {
 }
 
 async function startServer() {
-  const mod = await import(`file://${path.join(__dirname, '..', 'server', 'index.js').replace(/\\/g, '/')}`);
+  const mod = await import(pathToFileURL(path.join(__dirname, '..', 'server', 'index.js')).href);
   mod.setSyncCredentialCodec?.({
     encrypt(value) {
       if (!safeStorage.isEncryptionAvailable()) throw new Error('系统凭据加密不可用，无法保存 Google 登录信息');

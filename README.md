@@ -20,13 +20,23 @@ Windows 下也可以双击 `start.cmd`。需要 Node.js ≥ 22.5（用到内置 
 - `PaperReader-<版本>-portable.exe`：Windows 免安装单文件，不自动更新，需要手动换新版本
 - `PaperReader-<版本>-arm64.dmg`：macOS 版（Apple Silicon，M 系列芯片），不自动更新，需要手动换新版本
 
-安装版启动后约 8 秒检查一次更新，之后每 4 小时检查一次；网络出错会在 1/3/10/30 分钟后重试。发现新版本会在后台下载（顶栏显示进度），下载完弹窗问是否重启；选「稍后」就在下次退出时自动安装。也可以在菜单「帮助 → 检查更新」或设置的「更新」一栏手动检查。（仅 Windows 安装版支持；macOS 和免安装版需要自己到发布页下载新版本）
+安装版启动后约 8 秒检查一次更新，之后每 4 小时检查一次；网络出错会在 1/3/10/30 分钟后重试。发现新版本会在后台下载（顶栏显示进度），下载完弹窗问是否重启；选「稍后」就在下次退出时自动安装。也可以在菜单「帮助 → 检查更新」或设置的「更新」一栏手动检查。（仅 Windows 安装版支持；免安装版需要自己到发布页下载新版本，macOS 见下文）
 
 文库数据存在 `%APPDATA%\Paper Reader\library`（Windows）或 `~/Library/Application Support/Paper Reader/library`（macOS），菜单「文件 → 打开数据文件夹」可直达，更新、覆盖安装、卸载都不会动它。
 
 ### macOS 安装说明
 
-因为没有 Apple 开发者证书签名，首次打开会被 Gatekeeper 拦截（提示「无法打开，因为无法验证开发者」）。打开方法：在 Finder 里右键（或按住 Control 点击）`Paper Reader.app` → 「打开」，弹窗里再点一次「打开」即可，以后双击正常启动。
+macOS 版没有 Apple 开发者证书签名，所以不自动更新。在本机从源码安装 / 升级：
+
+```bash
+npm ci
+node node_modules/electron/install.js   # npm 11 默认不跑安装脚本，需要手动下载 Electron 本体
+npm run install:mac                     # 打包并装到 /Applications，会先退出正在运行的旧版本
+```
+
+国内网络下载 Electron 慢，可以先设 `ELECTRON_MIRROR=https://npmmirror.com/mirrors/electron/` 和 `ELECTRON_BUILDER_BINARIES_MIRROR=https://npmmirror.com/mirrors/electron-builder-binaries/`。
+
+本机打包的 App 可以直接打开。从发布页下载的 dmg 首次打开会被 Gatekeeper 拦截：在 Finder 里右键 `Paper Reader.app` →「打开」；如果提示「已损坏」，运行 `xattr -cr "/Applications/Paper Reader.app"`。
 
 ### 发布新版本（维护者）
 

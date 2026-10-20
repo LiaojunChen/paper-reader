@@ -683,6 +683,16 @@ app.post('/api/vault/open', (req, res) => {
   });
   res.json({ ok: true, path: vault.getVaultDir() });
 });
+// Highlight a vault folder or note in the OS file manager
+app.post('/api/vault/reveal', wrap(async (req, res) => {
+  const abs = vault.resolveIn(String(req.body.path || ''));
+  if (!fs.existsSync(abs)) throw notFound();
+  const { spawn } = await import('node:child_process');
+  const [cmd, args] = process.platform === 'win32' ? ['explorer', [`/select,${abs}`]]
+    : process.platform === 'darwin' ? ['open', ['-R', abs]] : ['xdg-open', [path.dirname(abs)]];
+  spawn(cmd, args, { detached: true, stdio: 'ignore' }).on('error', () => {}).unref();
+  res.json({ ok: true });
+}));
 
 // Clean up stale "running" states from a previous crash
 db.prepare("UPDATE annotations SET ai_status = 'error', ai_log = ai_log || '\n(服务重启，任务中断)' WHERE ai_status = 'running'").run();

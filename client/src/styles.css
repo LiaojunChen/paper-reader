@@ -87,7 +87,7 @@ a { color: var(--accent); }
 .mid-toolbar { display: flex; gap: 0.45rem; align-items: center; padding: 0.6rem 0.9rem; border-bottom: 1px solid var(--line-soft); flex-wrap: wrap; row-gap: 0.4rem; }
 .view-name { font-size: 1.2rem; font-weight: 650; letter-spacing: .01em; }
 
-.tree { padding: 0.5rem 0; }
+.tree { padding: 0.5rem 0; min-height: 100%; display: flex; flex-direction: column; }
 .tree-row { display: flex; align-items: center; gap: 0.35rem; height: 2.15rem; padding-right: 0.4rem; cursor: pointer; border-radius: var(--radius-sm); margin: 0.05rem 0.4rem; color: var(--text-2); }
 .tree-row:hover { background: #e3e6eb; } .tree-row.on { background: var(--sel); color: var(--text); font-weight: 600; }
 .tree-row.over { outline: 2px dashed var(--accent); outline-offset: -2px; }
@@ -98,7 +98,7 @@ a { color: var(--accent); }
 .tree-acts { display: none; } .tree-row:hover .tree-acts { display: flex; }
 .tree-sec { display: flex; justify-content: space-between; align-items: center; padding: 0.9rem 0.5rem 0.3rem 1rem; color: var(--muted); font-size: 0.78rem; font-weight: 600; letter-spacing: .06em; }
 .tree-sec .icon { font-size: 0.85rem; }
-.tree-root { padding-bottom: 2rem; min-height: 6rem; border-radius: var(--radius-sm); }
+.tree-root { padding-bottom: 2rem; min-height: 6rem; flex: 1; border-radius: var(--radius-sm); }
 .tree-root.over { outline: 2px dashed var(--accent); outline-offset: -2px; }
 .tree-row.paper .tree-name { color: var(--text); }
 .tree-row.note { color: var(--text-2); }
@@ -392,3 +392,11 @@ body.is-resizing iframe, body.is-resizing .pdf-container { pointer-events: none;
 .sync-auto input { width: auto; }
 .sync-error { color: var(--sync-error); overflow-wrap: anywhere; }
 .sync-badge { white-space: nowrap; }
+
+/* right-click menu */
+.ctx-menu { position: fixed; z-index: 300; min-width: 11rem; padding: 0.3rem; background: var(--panel); border-radius: var(--radius); box-shadow: var(--shadow-3); display: flex; flex-direction: column; }
+.ctx-menu > button { border: none; background: none; text-align: left; padding: 0.42rem 0.75rem; border-radius: var(--radius-sm); font-size: 0.92rem; color: var(--text); white-space: nowrap; }
+.ctx-menu > button:hover, .ctx-menu > button:focus-visible { background: var(--accent-soft); outline: none; }
+.ctx-menu > button.danger { color: var(--danger); } .ctx-menu > button.danger:hover, .ctx-menu > button.danger:focus-visible { background: #fdf0ef; }
+.ctx-menu > button:disabled { color: var(--muted); background: none; }
+.ctx-sep { height: 1px; background: var(--line-soft); margin: 0.25rem 0.4rem; }
