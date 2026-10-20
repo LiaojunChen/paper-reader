@@ -297,7 +297,7 @@ body.is-resizing iframe, body.is-resizing .pdf-container { pointer-events: none;
 /* web article reader */
 .web-wrap, .web-scroll { position: absolute; inset: 0; }
 .web-scroll { overflow-y: auto; background: #eceef2; }
-.web-article { max-width: 46rem; margin: 1.5rem auto 5rem; background: #fff; padding: 2.2rem 2.6rem 3rem; border-radius: var(--radius-lg); box-shadow: var(--shadow-2); }
+.web-article { max-width: 52rem; margin: 1.5rem auto 5rem; background: #fff; padding: 2.2rem 2.6rem 3rem; border-radius: var(--radius-lg); box-shadow: var(--shadow-2); }
 .web-head { border-bottom: 1px solid var(--line-soft); padding-bottom: 0.9rem; margin-bottom: 1.3rem; }
 .web-head h1 { font-size: 1.75rem; line-height: 1.35; margin: 0 0 0.5rem; }
 .hl-holder { position: relative; }
@@ -305,8 +305,10 @@ body.is-resizing iframe, body.is-resizing .pdf-container { pointer-events: none;
 .web-article { font-family: var(--read-font); }
 .web-article:lang(ja) { --read-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Hiragino Sans", "Yu Gothic UI", "Meiryo", sans-serif; }
 .web-article:lang(ko) { --read-font: -apple-system, BlinkMacSystemFont, "Segoe UI", "Apple SD Gothic Neo", "Malgun Gothic", sans-serif; }
-.web-body { font-size: 1.05rem; line-height: 1.85; color: #23262c; position: relative; z-index: 2; overflow-wrap: break-word; text-autospace: normal; }
-.web-article:lang(en) .web-body { line-height: 1.7; hyphens: auto; }
+/* Match the web's own reading size instead of the app's 15px UI scale: 18px body on a 720px column.
+   The reader's zoom control scales this base through --web-zoom rather than replacing it with rem. */
+.web-body { font-size: calc(18px * var(--web-zoom, 1)); line-height: 1.8; color: #23262c; position: relative; z-index: 2; overflow-wrap: break-word; text-autospace: normal; }
+.web-article:lang(en) .web-body { line-height: 1.8; hyphens: auto; }
 .web-body p, .web-body li { text-wrap: pretty; }
 .web-body a { color: var(--accent); text-underline-offset: 0.18em; }
 .web-body code { font-size: 0.86em; }

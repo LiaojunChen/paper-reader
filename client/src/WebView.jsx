@@ -148,9 +148,9 @@ const WebView = forwardRef(function WebView({ item, annotations = [], activeId, 
     back() { scroller.current.scrollTop = 0; },
     zoom(v) {
       const cur = +(body.current.dataset.zoom || 1);
-      const n = v === 'in' ? cur + 0.1 : v === 'out' ? cur - 0.1 : 1;
+      const n = Math.min(2, Math.max(0.7, v === 'in' ? cur + 0.1 : v === 'out' ? cur - 0.1 : 1));
       body.current.dataset.zoom = n;
-      body.current.style.fontSize = `${Math.min(2, Math.max(0.7, n))}rem`;
+      body.current.style.setProperty('--web-zoom', n);
       draw();
     },
     find() { /* browser Ctrl+F works on rendered text */ },
