@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useRef, forwardRef, useImperativeHandle } from 'react';
 import { renderMd } from './Markdown.jsx';
 import { COLORS } from './api.js';
+import { articleLang } from './articleLang.js';
+import { unescapeMath } from '../../shared/text.js';
 
 // Reader for clipped web articles. Mirrors PdfView's API (selection, highlights, hover)
 // but anchors annotations to character offsets in the rendered text instead of page rects.
@@ -9,7 +11,9 @@ const WebView = forwardRef(function WebView({ item, annotations = [], activeId, 
   const body = useRef(null);
   const fns = useRef(cbs);
   fns.current = cbs;
-  const html = useMemo(() => renderMd(item.content || ''), [item.content]);
+  // Articles clipped before math unescaping existed still have $a\_t$ stored, so clean on render too
+  const html = useMemo(() => renderMd(unescapeMath(item.content || '')), [item.content]);
+  const lang = useMemo(() => articleLang(`${item.title || ''}\n${item.content || ''}`), [item.title, item.content]);
 
   // ---- offset helpers: map a DOM range to/from plain-text offsets of the article ----
   function textNodes() {
@@ -158,7 +162,7 @@ const WebView = forwardRef(function WebView({ item, annotations = [], activeId, 
   return (
     <div className={`web-wrap ${dark ? 'web-dark' : ''}`}>
       <div className="web-scroll" ref={scroller}>
-        <article className="web-article">
+        <article className="web-article" lang={lang}>
           <header className="web-head">
             <h1>{item.title}</h1>
             <div className="muted small">
@@ -176,3 +180,4 @@ const WebView = forwardRef(function WebView({ item, annotations = [], activeId, 
   );
 });
 export default WebView;
+

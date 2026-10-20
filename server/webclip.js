@@ -2,6 +2,7 @@
 import { Readability, isProbablyReaderable } from '@mozilla/readability';
 import { parseHTML } from 'linkedom';
 import TurndownService from 'turndown';
+import { unescapeMath } from '../shared/text.js';
 
 const UA = 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36';
 
@@ -45,7 +46,7 @@ export async function fetchArticle(url) {
   absolutize(document, finalUrl);
   const meta = n => document.querySelector(`meta[property="${n}"], meta[name="${n}"]`)?.getAttribute('content') || '';
   const art = new Readability(document.cloneNode(true), { charThreshold: 200 }).parse();
-  const md = art?.content ? turndown().turndown(art.content) : '';
+  const md = art?.content ? unescapeMath(turndown().turndown(art.content)) : '';
   const title = (art?.title || meta('og:title') || document.title || finalUrl).replace(/\s+/g, ' ').trim();
   const authors = [art?.byline, meta('author'), meta('article:author')].filter(Boolean)
     .flatMap(s => String(s).split(/\s*(?:,|、|and |&)\s*/)).map(s => s.replace(/^(by|作者)[:：\s]*/i, '').trim())
