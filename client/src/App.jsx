@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { api, subscribe, fmtAuthors } from './api.js';
 import Reader from './Reader.jsx';
 import NoteEditor, { openNoteWindow } from './NoteEditor.jsx';
@@ -8,6 +8,7 @@ import FolderTree from './FolderTree.jsx';
 import Splitter, { usePaneWidth } from './Splitter.jsx';
 import UpdateBadge from './UpdateBadge.jsx';
 import { DriveSyncBadge } from './DriveSync.jsx';
+import { useContextMenu } from './ContextMenu.jsx';
 
 export default function App() {
   const [tree, setTree] = useState({ folders: [], notes: [], items: [], vault: '' });
@@ -90,12 +91,12 @@ export default function App() {
   // Refresh tab titles when item metadata changes
   useEffect(() => { setTabs(ts => ts.map(t => ({ ...t, title: items.find(i => i.id === t.id)?.title || t.title }))); }, [items]);
 
-  async function upload(files) {
+  async function upload(files, target = folder) {
     const pdfs = [...files].filter(f => /\.pdf$/i.test(f.name) || f.type === 'application/pdf');
     if (!pdfs.length) return notify('请拖入 PDF 文件');
     const fd = new FormData();
     for (const f of pdfs) fd.append('files', f);
-    if (folder) fd.append('folder', folder);
+    if (target) fd.append('folder', target);
     notify(`正在上传 ${pdfs.length} 个文件…`);
     const res = await api.post('/api/upload', fd).catch(e => [{ error: e.message }]);
     const dup = res.filter(r => r.duplicate).length, err = res.filter(r => r.error);
@@ -109,6 +110,39 @@ export default function App() {
     reloadAll();
     setSelected({ kind: 'note', id: n.id });
   }
+  // "添加 PDF 到这里" from the tree: one shared hidden picker, remembering the target folder
+  const pickRef = useRef(null), pickTarget = useRef('');
+  const pickPdf = target => { pickTarget.current = target; pickRef.current?.click(); };
+
+  const [menu, openMenu] = useContextMenu();
+  const copy = (text, what) => navigator.clipboard.writeText(text).then(() => notify(`${what}已复制`));
+  const itemMenu = (e, it) => {
+    setSelected({ kind: 'item', id: it.id });
+    openMenu(e, view.type === 'trash' ? [
+      { label: '恢复', onClick: () => api.patch(`/api/items/${it.id}`, { deleted: 0 }).then(reloadAll) },
+      { label: '永久删除', danger: true, onClick: async () => {
+        if (!confirm('永久删除这篇文献的 PDF 和批注？\n它的笔记文件夹会移到笔记库的 .trash，不会直接删除。')) return;
+        await api.del(`/api/items/${it.id}`); setSelected(null); reloadAll();
+      } },
+    ] : [
+      (it.file || it.kind === 'web') && { label: '📖 阅读', onClick: () => openItem(it.id) },
+      { label: '📝 新建笔记', onClick: async () => {
+        const n = await api.post('/api/notes', { item_id: it.id, content: `# ${it.title} 笔记\n` });
+        reloadAll(); setSelected({ kind: 'note', id: n.id, parent: it.id });
+      } },
+      { label: it.starred ? '☆ 取消星标' : '★ 加星标', onClick: () => api.patch(`/api/items/${it.id}`, { starred: it.starred ? 0 : 1 }).then(loadItems) },
+      '-',
+      { label: '复制 BibTeX', onClick: async () => copy(await api.get(`/api/items/${it.id}/bibtex`), 'BibTeX ') },
+      { label: '复制标题', onClick: () => copy(it.title, '标题') },
+      '-',
+      { label: '移到回收站', danger: true, onClick: async () => { await api.patch(`/api/items/${it.id}`, { deleted: 1 }); notify('已移到回收站'); setSelected(null); reloadAll(); } },
+    ]);
+  };
+  const listMenu = e => view.type !== 'trash' && view.type !== 'starred' && openMenu(e, [
+    { label: '📄 添加 PDF…', onClick: () => pickPdf(folder) },
+    { label: '＋ 导入链接…', onClick: () => setImportOpen(true) },
+    { label: '📝 新建笔记', onClick: newNote },
+  ]);
 
   const sorted = useMemo(() => {
     const arr = [...items];
@@ -164,7 +198,8 @@ export default function App() {
             setView={v => { setView(v); setSelected(null); }}
             onSelectFolder={path => { setView({ type: 'folder', path }); setSelected(null); }}
             onSelectItem={id => setSelected({ kind: 'item', id })} onOpenItem={openItem}
-            onSelectNote={id => setSelected({ kind: 'note', id })} onOpenNote={openNoteWindow} />
+            onSelectNote={id => setSelected({ kind: 'note', id })} onOpenNote={openNoteWindow} onAddPdf={pickPdf} />
+          <input ref={pickRef} type="file" accept="application/pdf" multiple hidden onChange={e => { upload(e.target.files, pickTarget.current); e.target.value = ''; }} />
         </aside>
         <Splitter pane={leftPane} side="left" />
         <section className="col-mid">
@@ -181,11 +216,11 @@ export default function App() {
               <option value="created">添加时间</option><option value="updated">修改时间</option><option value="title">标题</option><option value="year">年份</option>
             </select>
           </div>
-          <div className="item-table">
+          <div className="item-table" onContextMenu={listMenu}>
             <div className="item-row head"><span className="c-star" /><span className="c-title">标题</span><span className="c-auth">作者</span><span className="c-year">年份</span><span className="c-badges" /></div>
             {sorted.map(it => (
               <div key={it.id} className={`item-row ${selected?.id === it.id ? 'sel' : ''}`} draggable
-                onDragStart={e => e.dataTransfer.setData('text/x-items', JSON.stringify([{ kind: 'item', id: it.id }]))}
+                onDragStart={e => e.dataTransfer.setData('text/x-items', JSON.stringify([{ kind: 'item', id: it.id }]))} onContextMenu={e => itemMenu(e, it)}
                 onClick={() => setSelected({ kind: 'item', id: it.id })} onDoubleClick={() => openItem(it.id)}>
                 <span className="c-star" onClick={e => { e.stopPropagation(); api.patch(`/api/items/${it.id}`, { starred: it.starred ? 0 : 1 }).then(loadItems); }}>{it.starred ? '★' : '☆'}</span>
                 <span className="c-title">
@@ -203,6 +238,16 @@ export default function App() {
             {standaloneNotes.map(n => (
               <div key={n.id} className={`item-row ${selected?.id === n.id ? 'sel' : ''}`} draggable
                 onDragStart={e => e.dataTransfer.setData('text/x-items', JSON.stringify([{ kind: 'note', id: n.id }]))}
+                onContextMenu={e => { setSelected({ kind: 'note', id: n.id }); openMenu(e, [
+                  { label: '打开', onClick: () => setSelected({ kind: 'note', id: n.id }) },
+                  { label: '⧉ 新窗口打开', onClick: () => openNoteWindow(n.id) },
+                  { label: '复制 Obsidian 链接', onClick: () => copy(`[[${n.title}]]`, '链接') },
+                  '-',
+                  { label: '删除笔记', danger: true, onClick: async () => {
+                    if (!confirm(`删除笔记「${n.title || '无标题笔记'}」？文件会移到笔记库的 .trash 文件夹。`)) return;
+                    await api.del(`/api/note?id=${encodeURIComponent(n.id)}`); setSelected(null); reloadAll();
+                  } },
+                ]); }}
                 onClick={() => setSelected({ kind: 'note', id: n.id })} onDoubleClick={() => openNoteWindow(n.id)}>
                 <span className="c-star" /><span className="c-title"><span className="file-ic">📝</span>{n.title || '无标题笔记'}</span>
                 <span className="c-auth muted">{n.dir || '根目录'}</span><span className="c-year" /><span className="c-badges" />
@@ -236,6 +281,7 @@ export default function App() {
       {showSettings && <Settings settings={settings} onClose={() => setShowSettings(false)} onSaved={s => { setSettings(s); setShowSettings(false); notify('设置已保存'); }} />}
       {drag && <div className="drop-mask">松开以添加 PDF 到「{viewName}」</div>}
       {toast && <div className="toast">{toast}</div>}
+      {menu}
     </div>
   );
 }
